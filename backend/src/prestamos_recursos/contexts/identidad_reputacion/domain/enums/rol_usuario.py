@@ -1,0 +1,11 @@
+from enum import Enum
+
+
+class RolUsuario(str, Enum):
+    """«enumeration» RolUsuario."""
+
+    ESTUDIANTE = "ESTUDIANTE"
+    DOCENTE = "DOCENTE"
+    PERSONAL_ADMINISTRATIVO = "PERSONAL_ADMINISTRATIVO"
+    GESTOR_ALMACEN = "GESTOR_ALMACEN"
+    ADMINISTRADOR_SISTEMA = "ADMINISTRADOR_SISTEMA"
