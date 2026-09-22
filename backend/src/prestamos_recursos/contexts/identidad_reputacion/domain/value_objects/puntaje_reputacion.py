@@ -10,10 +10,10 @@ class PuntajeReputacion:
     puntos: int
 
     def sumar(self, p: int) -> PuntajeReputacion:
-        raise NotImplementedError
+        return PuntajeReputacion(puntos=self.puntos + p)
 
     def restar(self, p: int) -> PuntajeReputacion:
-        raise NotImplementedError
+        return PuntajeReputacion(puntos=max(0, self.puntos - p))
 
     def es_valido(self) -> bool:
-        raise NotImplementedError
+        return self.puntos >= 0

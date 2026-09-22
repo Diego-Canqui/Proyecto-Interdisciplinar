@@ -16,8 +16,19 @@ class Usuario(BaseEntity):
     estado: bool
     roles: set[RolUsuario] = field(default_factory=set)
 
-    def actualizar_perfil(self) -> None:
-        raise NotImplementedError
+    def actualizar_perfil(
+        self,
+        *,
+        nombre: str | None = None,
+        correo: str | None = None,
+        telefono: str | None = None,
+    ) -> None:
+        if nombre is not None:
+            self.nombre = nombre
+        if correo is not None:
+            self.correo = correo
+        if telefono is not None:
+            self.telefono = telefono
 
     def cambiar_estado(self) -> None:
-        raise NotImplementedError
+        self.estado = not self.estado
