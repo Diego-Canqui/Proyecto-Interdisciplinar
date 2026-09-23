@@ -2,9 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from prestamos_recursos.contexts.identidad_reputacion.presentation.autenticacion_controller import router as autenticacion_router
+from prestamos_recursos.contexts.identidad_reputacion.presentation.usuario_controller import router as usuario_router
 from prestamos_recursos.contexts.catalogo.presentation.recurso_controller import router as recurso_router
 from prestamos_recursos.contexts.reservas.presentation.reserva_controller import router as reserva_router
 from prestamos_recursos.contexts.prestamos.presentation.prestamo_controller import router as prestamo_router
+from prestamos_recursos.shared.database import Base, engine
 
 app = FastAPI(title="Proyecto Interdisciplinar - Préstamo de Recursos")
 
@@ -15,7 +17,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+def crear_tablas() -> None:
+    # Provisional: sin Alembic todavía, se crean las tablas directo desde los modelos.
+    Base.metadata.create_all(bind=engine)
+
+
 app.include_router(autenticacion_router)
+app.include_router(usuario_router)
 app.include_router(recurso_router)
 app.include_router(reserva_router)
 app.include_router(prestamo_router)

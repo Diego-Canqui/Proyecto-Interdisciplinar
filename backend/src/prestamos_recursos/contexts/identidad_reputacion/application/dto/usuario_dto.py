@@ -14,3 +14,12 @@ class UsuarioDTO(BaseModel):
     telefono: str
     estado: bool
     roles: list[RolUsuario]
+
+
+class CrearUsuarioDTO(BaseModel):
+    """Datos necesarios para registrar un nuevo Usuario."""
+
+    nombre: str
+    correo: str
+    telefono: str
+    roles: list[RolUsuario] = []
