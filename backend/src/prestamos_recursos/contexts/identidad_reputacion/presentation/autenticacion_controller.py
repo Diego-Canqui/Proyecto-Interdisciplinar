@@ -1,6 +1,6 @@
 """«Boundary» AutenticacionController."""
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 
 from prestamos_recursos.contexts.identidad_reputacion.application.autenticacion_service import (
     AutenticacionService,
@@ -17,12 +17,15 @@ from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies 
     get_autenticacion_service,
     get_current_user,
 )
+from prestamos_recursos.shared.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
 
 
 @router.post("/registro", response_model=TokenDTO, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
 def registrar_usuario(
+    request: Request,
     datos: CrearUsuarioDTO,
     service: AutenticacionService = Depends(get_autenticacion_service),  # noqa: B008
 ) -> TokenDTO:
@@ -42,7 +45,9 @@ def registrar_usuario(
 
 
 @router.post("/login", response_model=TokenDTO)
+@limiter.limit("5/minute")
 def login(
+    request: Request,
     credenciales: LoginDTO,
     service: AutenticacionService = Depends(get_autenticacion_service),  # noqa: B008
 ) -> TokenDTO:
