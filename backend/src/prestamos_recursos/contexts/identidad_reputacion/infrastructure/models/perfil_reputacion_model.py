@@ -9,10 +9,10 @@ from prestamos_recursos.shared.database import Base
 
 
 class PerfilReputacionModel(Base):
-    """Tabla identidad.perfiles_reputacion (agregado PerfilReputacion)."""
+    """Tabla identidad_reputacion.perfiles_reputacion (agregado PerfilReputacion)."""
 
     __tablename__ = "perfiles_reputacion"
-    __table_args__ = {"schema": "identidad"}
+    __table_args__ = {"schema": "identidad_reputacion"}
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     usuario_id: Mapped[UUID] = mapped_column()

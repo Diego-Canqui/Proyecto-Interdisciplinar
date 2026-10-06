@@ -10,10 +10,10 @@ from prestamos_recursos.shared.database import Base
 
 
 class SancionModel(Base):
-    """Tabla identidad.sanciones (agregado Sancion)."""
+    """Tabla identidad_reputacion.sanciones (agregado Sancion)."""
 
     __tablename__ = "sanciones"
-    __table_args__ = {"schema": "identidad"}
+    __table_args__ = {"schema": "identidad_reputacion"}
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     perfil_reputacion_id: Mapped[UUID] = mapped_column()

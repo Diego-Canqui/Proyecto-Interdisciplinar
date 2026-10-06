@@ -8,10 +8,10 @@ from prestamos_recursos.shared.database import Base
 
 
 class ExcepcionAcademicaModel(Base):
-    """Tabla identidad.excepciones_academicas (agregado ExcepcionAcademica)."""
+    """Tabla identidad_reputacion.excepciones_academicas (agregado ExcepcionAcademica)."""
 
     __tablename__ = "excepciones_academicas"
-    __table_args__ = {"schema": "identidad"}
+    __table_args__ = {"schema": "identidad_reputacion"}
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     usuario_id: Mapped[UUID] = mapped_column()
