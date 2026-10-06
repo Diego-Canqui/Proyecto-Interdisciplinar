@@ -10,7 +10,16 @@ async function request(path, options = {}) {
     },
   });
   if (!response.ok) {
-    throw new Error(`Error ${response.status}`);
+    let detail = `Error ${response.status}`;
+    try {
+      const errorData = await response.json();
+      detail = errorData.detail || detail;
+    } catch {
+      // Ignore JSON parse errors, use status-based message
+    }
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
