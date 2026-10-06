@@ -8,14 +8,17 @@ from prestamos_recursos.shared.database import Base
 
 
 class UsuarioModel(Base):
-    """Tabla identidad.usuarios (agregado Usuario)."""
+    """Tabla identidad_reputacion.usuario (agregado Usuario)."""
 
-    __tablename__ = "usuarios"
-    __table_args__ = {"schema": "identidad"}
+    __tablename__ = "usuario"
+    __table_args__ = {"schema": "identidad_reputacion"}
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
-    nombre: Mapped[str] = mapped_column(String(255))
-    correo: Mapped[str] = mapped_column(String(255))
-    telefono: Mapped[str] = mapped_column(String(255))
-    estado: Mapped[bool] = mapped_column()
-    roles: Mapped[list[str]] = mapped_column(ARRAY(String(30)))
+    nombre: Mapped[str] = mapped_column(String(100))
+    correo: Mapped[str] = mapped_column(String(255), unique=True)
+    telefono: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    estado: Mapped[bool] = mapped_column(default=True)
+    roles: Mapped[list[str]] = mapped_column(
+        ARRAY(String(30)), default=list
+    )

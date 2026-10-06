@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 import bcrypt
 
+from prestamos_recursos.config import settings
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import (
     RolUsuario,
 )
@@ -30,9 +31,9 @@ class Usuario(BaseEntity):
         password_plano: str,
         roles: list[RolUsuario] | None = None,
     ) -> Usuario:
-        """Crea un Usuario hasheando la contraseña con bcrypt (coste 12)."""
+        """Crea un Usuario hasheando la contraseña con bcrypt (coste configurable)."""
         password_bytes = password_plano.encode("utf-8")
-        salt = bcrypt.gensalt(rounds=12)
+        salt = bcrypt.gensalt(rounds=settings.bcrypt_cost)
         password_hash = bcrypt.hashpw(password_bytes, salt).decode("utf-8")
         return cls(
             nombre=nombre,

@@ -25,6 +25,7 @@ class SqlUsuarioRepository(UsuarioRepository):
         modelo.nombre = usuario.nombre
         modelo.correo = usuario.correo
         modelo.telefono = usuario.telefono
+        modelo.password_hash = usuario.password_hash
         modelo.estado = usuario.estado
         modelo.roles = [rol.value for rol in usuario.roles]
         self._session.commit()
@@ -48,6 +49,7 @@ class SqlUsuarioRepository(UsuarioRepository):
             nombre=modelo.nombre,
             correo=modelo.correo,
             telefono=modelo.telefono,
+            password_hash=modelo.password_hash,
             estado=modelo.estado,
-            roles={RolUsuario(r) for r in modelo.roles},
+            roles=[RolUsuario(r) for r in modelo.roles],
         )

@@ -11,6 +11,8 @@ class Settings(BaseSettings):
         "postgresql+psycopg://prestamos:cambiar_esto@localhost:5432/prestamos_recursos"
     )
     jwt_secret: str = "cambiar_esto"
+    jwt_expiracion_horas: int = 24
+    bcrypt_cost: int = 12
 
     model_config = SettingsConfigDict(env_file=ROOT_DIR / ".env", extra="ignore")
 
