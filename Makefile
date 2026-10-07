@@ -9,7 +9,7 @@ db: ## Levanta solo PostgreSQL
 	docker compose up -d
 
 backend: ## Levanta solo Backend (FastAPI)
-	cd backend && source .venv/bin/activate.fish && .venv/bin/uvicorn prestamos_recursos.main:app --reload --app-dir src
+	cd backend && source .venv/bin/activate && .venv/bin/uvicorn prestamos_recursos.main:app --reload --app-dir src
 
 frontend: ## Levanta solo Frontend (Vite)
 	cd frontend && npm run dev
@@ -27,7 +27,7 @@ restart-db: ## Reinicia BD (borra volúmenes)
 	docker compose up -d
 
 install-backend: ## Instala dependencias Python
-	cd backend && source .venv/bin/activate.fish && pip install -r requirements.txt
+	cd backend && source .venv/bin/activate && pip install -r requirements.txt
 
 install-frontend: ## Instala dependencias Node
 	cd frontend && npm install
