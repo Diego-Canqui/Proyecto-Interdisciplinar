@@ -29,7 +29,10 @@ ServicioReservas = Annotated[ReservaService, Depends(obtener_servicio)]
 
 @router.post("", response_model=ReservaDTO, status_code=201)
 def solicitar_reserva(datos: CrearReservaDTO, servicio: ServicioReservas) -> ReservaDTO:
-    return servicio.crear_reserva(datos)
+    try:
+        return servicio.crear_reserva(datos)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.get("/{id_reserva}", response_model=ReservaDTO)

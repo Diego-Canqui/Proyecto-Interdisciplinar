@@ -24,6 +24,12 @@ class ReservaService:
 
     def crear_reserva(self, datos: CrearReservaDTO) -> ReservaDTO:
         reserva = Reserva.crear(**datos.model_dump())
+        reservas_activas = self._reserva_repository.obtener_activas_por_recurso(
+            reserva.recurso_id
+        )
+        if any(reserva.se_superpone_con(otra) for otra in reservas_activas):
+            raise ValueError("el recurso ya tiene una reserva activa en ese horario")
+
         self._reserva_repository.guardar(reserva)
         return ReservaDTO.model_validate(reserva)
 
