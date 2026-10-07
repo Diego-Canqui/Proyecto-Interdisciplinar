@@ -49,6 +49,38 @@ def test_crear_consultar_y_cancelar(cliente):
     assert cliente.patch(f"{ruta}/cancelar").status_code == 409
 
 
+def test_rechaza_cruce_y_permite_horarios_libres(cliente):
+    recurso = str(uuid4())
+    primera = datos_reserva(recurso_id=recurso)
+    creada = cliente.post("/reservas", json=primera)
+    assert creada.status_code == 201
+
+    inicio = datetime.fromisoformat(primera["fecha_inicio"])
+    fin = datetime.fromisoformat(primera["fecha_fin"])
+    cruzada = primera | {
+        "fecha_inicio": (inicio + timedelta(minutes=30)).isoformat(),
+        "fecha_fin": (fin + timedelta(minutes=30)).isoformat(),
+    }
+    conflicto = cliente.post("/reservas", json=cruzada)
+    assert conflicto.status_code == 409
+    assert conflicto.json()["detail"] == (
+        "el recurso ya tiene una reserva activa en ese horario"
+    )
+
+    consecutiva = primera | {
+        "fecha_inicio": fin.isoformat(),
+        "fecha_fin": (fin + timedelta(hours=1)).isoformat(),
+    }
+    assert cliente.post("/reservas", json=consecutiva).status_code == 201
+
+    para_otro_recurso = cruzada | {"recurso_id": str(uuid4())}
+    assert cliente.post("/reservas", json=para_otro_recurso).status_code == 201
+
+    id_primera = creada.json()["id"]
+    assert cliente.patch(f"/reservas/{id_primera}/cancelar").status_code == 200
+    assert cliente.post("/reservas", json=primera).status_code == 201
+
+
 @pytest.mark.parametrize("caso", ["fechas_iguales", "fechas_invertidas", "zona", "uuid", "faltante"])
 def test_datos_invalidos(cliente, caso):
     datos = datos_reserva()
@@ -75,7 +107,7 @@ def test_reserva_inexistente(cliente):
 def test_cola_ordenada_y_filtrada(cliente):
     recurso = str(uuid4())
     ids = []
-    for horas in (4, 2, -3, 1):
+    for horas in (6, 3, -3, 1):
         respuesta = cliente.post("/reservas", json=datos_reserva(horas, recurso))
         assert respuesta.status_code == 201
         ids.append(respuesta.json()["id"])

@@ -22,8 +22,10 @@ Abrir `http://localhost:8000/docs` y buscar la sección Reservas:
 
 Los IDs deben ser UUID y las fechas deben tener un rango válido. Para probar la
 cola, usar fechas futuras con zona horaria, por ejemplo el sufijo `Z` para UTC.
-La API responde con 404 si no existe la reserva, 409 si no puede cancelarse en su
-estado actual y 422 si los datos enviados son inválidos.
+No se aceptan dos reservas activas del mismo recurso cuyos horarios se cruzan;
+si una termina justo cuando comienza la otra, ambas se permiten. La API responde
+con 404 si no existe la reserva, 409 si el horario está ocupado o no se puede
+cancelar en el estado actual, y 422 si los datos enviados son inválidos.
 
 ## Pruebas
 
