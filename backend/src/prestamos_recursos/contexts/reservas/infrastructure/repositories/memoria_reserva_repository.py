@@ -27,6 +27,14 @@ class MemoriaReservaRepository(ReservaRepository):
             if reserva.usuario_id == id_usuario
         ]
 
+    def obtener_activas_por_recurso(self, id_recurso: UUID) -> list[Reserva]:
+        estados_activos = {EstadoReserva.PENDIENTE, EstadoReserva.CONFIRMADA}
+        return [
+            deepcopy(reserva)
+            for reserva in self._reservas.values()
+            if reserva.recurso_id == id_recurso and reserva.estado in estados_activos
+        ]
+
     def obtener_cola_por_recurso(self, id_recurso: UUID) -> list[Reserva]:
         return [
             deepcopy(reserva)
