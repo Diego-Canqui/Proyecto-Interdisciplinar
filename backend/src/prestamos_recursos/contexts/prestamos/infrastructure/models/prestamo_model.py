@@ -1,7 +1,8 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Enum as SAEnum
+from sqlalchemy import DateTime, UniqueConstraint
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
@@ -12,7 +13,10 @@ class PrestamoModel(Base):
     """Tabla prestamos.prestamos (agregado Prestamo)."""
 
     __tablename__ = "prestamos"
-    __table_args__ = {"schema": "prestamos"}
+    __table_args__ = (
+        UniqueConstraint("reserva_id", name="uq_prestamos_reserva_id"),
+        {"schema": "prestamos"},
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     reserva_id: Mapped[UUID] = mapped_column()
