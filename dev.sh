@@ -31,8 +31,20 @@ FRONTEND_PID=$!
 cd ..
 
 echo -e "\n✅ TODO CORRIENDO"
-echo "   Backend:  http://localhost:8000/docs"
-echo "   Frontend: http://localhost:5173"
+echo "   ┌─────────────────────────────────────────────────────────────┐"
+echo "   │  PÁGINAS PARA REVISAR (abre en navegador):                  │"
+echo "   ├─────────────────────────────────────────────────────────────┤"
+echo "   │  🌐 App principal:      http://localhost:5173/              │"
+echo "   │  📝 Registro:           http://localhost:5173/registro      │"
+echo "   │  🔐 Login:              http://localhost:5173/login         │"
+echo "   │  📚 API Docs (Swagger): http://localhost:8000/docs          │"
+echo "   └─────────────────────────────────────────────────────────────┘"
+echo ""
+echo "   💡 Flujo demo:"
+echo "      1. Ve a /registro → crea usuario (validaciones incluidas)"
+echo "      2. Ve a /login → entra con ese usuario"
+echo "      3. En Swagger /docs → GET /auth/perfil con token"
+echo ""
 echo "   Presiona Ctrl+C para parar todo\n"
 
 wait $BACKEND_PID $FRONTEND_PID
