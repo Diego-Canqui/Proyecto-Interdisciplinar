@@ -1,4 +1,5 @@
 """Tests unitarios para la entidad Usuario (domain)."""
+import pytest
 import re
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario i
 )
 
 
+@pytest.mark.unit
 class TestUsuarioCrearConPassword:
     """Tests para el método de factoría crear_con_password."""
 
@@ -66,10 +68,10 @@ class TestUsuarioCrearConPassword:
             correo="admin@example.com",
             telefono=None,
             password_plano="Password123",
-            roles=[RolUsuario.ADMIN, RolUsuario.BIBLIOTECARIO],
+            roles=[RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN],
         )
 
-        assert usuario.roles == [RolUsuario.ADMIN, RolUsuario.BIBLIOTECARIO]
+        assert usuario.roles == [RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN]
 
     def test_usuario_crear_con_password_telefono_opcional(self) -> None:
         """Teléfono es opcional y puede ser None."""

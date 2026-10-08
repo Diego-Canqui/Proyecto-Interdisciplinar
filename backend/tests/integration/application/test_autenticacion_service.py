@@ -46,6 +46,7 @@ def auth_service(usuario_repo):
     return AutenticacionService(usuario_repo)
 
 
+@pytest.mark.integration
 class TestRegistrarUsuario:
     """Tests para registrar_usuario."""
 
@@ -190,14 +191,15 @@ class TestRegistrarUsuario:
             correo="admin@example.com",
             telefono=None,
             password="Password123",
-            roles=[RolUsuario.ADMIN, RolUsuario.BIBLIOTECARIO],
+            roles=[RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN],
         )
 
         resultado = auth_service.registrar_usuario(datos)
 
-        assert resultado.usuario.roles == [RolUsuario.ADMIN, RolUsuario.BIBLIOTECARIO]
+        assert resultado.usuario.roles == [RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN]
 
 
+@pytest.mark.integration
 class TestLogin:
     """Tests para login."""
 
@@ -251,6 +253,7 @@ class TestLogin:
         assert exc_info.value.detail == "Credenciales inválidas"
 
 
+@pytest.mark.integration
 class TestValidarToken:
     """Tests para validar_token."""
 
@@ -283,6 +286,7 @@ class TestValidarToken:
         assert auth_service.validar_token(token_falso) is None
 
 
+@pytest.mark.integration
 class TestObtenerUsuarioPorToken:
     """Tests para obtener_usuario_por_token."""
 

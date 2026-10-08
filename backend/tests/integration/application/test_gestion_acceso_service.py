@@ -56,6 +56,7 @@ def gestion_acceso_service(auth_service):
     return GestionAccesoService(auth_service)
 
 
+@pytest.mark.integration
 class TestAutenticarJWT:
     """Tests para autenticar_jwt (RF-10, RF-11)."""
 
@@ -97,6 +98,7 @@ class TestAutenticarJWT:
         assert gestion_acceso_service.autenticar_jwt(token_expirado) is False
 
 
+@pytest.mark.integration
 class TestObtenerUsuarioAutenticado:
     """Tests para obtener_usuario_autenticado (RF-10, RF-11)."""
 
@@ -157,3 +159,84 @@ class TestObtenerUsuarioAutenticado:
         }
         token = jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
         assert gestion_acceso_service.obtener_usuario_autenticado(token) is None
+
+
+@pytest.mark.integration
+class TestVerificarPermisos:
+    """Tests para verificar_permisos (RF-10)."""
+
+    def test_verificar_permisos_usuario_tiene_rol_retorna_true(
+        self, gestion_acceso_service, auth_service
+    ):
+        """verificar_permisos retorna True si usuario tiene el rol solicitado."""
+        # Registrar usuario con rol ADMINISTRADOR_SISTEMA
+        datos_registro = CrearUsuarioDTO(
+            nombre="Admin User",
+            correo="admin@example.com",
+            telefono="+34 600 123 456",
+            password="Password123",
+            roles=[RolUsuario.ADMINISTRADOR_SISTEMA],
+        )
+        resultado = auth_service.registrar_usuario(datos_registro)
+        usuario_id = resultado.usuario.id
+
+        # Verificar que tiene el rol
+        assert (
+            gestion_acceso_service.verificar_permisos(usuario_id, RolUsuario.ADMINISTRADOR_SISTEMA)
+            is True
+        )
+
+    def test_verificar_permisos_usuario_no_tiene_rol_retorna_false(
+        self, gestion_acceso_service, auth_service
+    ):
+        """verificar_permisos retorna False si usuario NO tiene el rol solicitado."""
+        # Registrar usuario con rol ESTUDIANTE (por defecto)
+        datos_registro = CrearUsuarioDTO(
+            nombre="Estudiante User",
+            correo="estudiante@example.com",
+            telefono="+34 600 123 456",
+            password="Password123",
+        )
+        resultado = auth_service.registrar_usuario(datos_registro)
+        usuario_id = resultado.usuario.id
+
+        # Verificar que NO tiene rol ADMINISTRADOR_SISTEMA
+        assert (
+            gestion_acceso_service.verificar_permisos(usuario_id, RolUsuario.ADMINISTRADOR_SISTEMA)
+            is False
+        )
+
+    def test_verificar_permisos_usuario_con_multiples_roles(
+        self, gestion_acceso_service, auth_service
+    ):
+        """verificar_permisos funciona con usuario que tiene múltiples roles."""
+        datos_registro = CrearUsuarioDTO(
+            nombre="Multi Role User",
+            correo="multi@example.com",
+            telefono="+34 600 123 456",
+            password="Password123",
+            roles=[RolUsuario.DOCENTE, RolUsuario.GESTOR_ALMACEN],
+        )
+        resultado = auth_service.registrar_usuario(datos_registro)
+        usuario_id = resultado.usuario.id
+
+        assert (
+            gestion_acceso_service.verificar_permisos(usuario_id, RolUsuario.DOCENTE) is True
+        )
+        assert (
+            gestion_acceso_service.verificar_permisos(usuario_id, RolUsuario.GESTOR_ALMACEN) is True
+        )
+        assert (
+            gestion_acceso_service.verificar_permisos(usuario_id, RolUsuario.ADMINISTRADOR_SISTEMA)
+            is False
+        )
+
+    def test_verificar_permisos_usuario_inexistente_retorna_false(
+        self, gestion_acceso_service
+    ):
+        """verificar_permisos retorna False para usuario inexistente."""
+        usuario_inexistente = "00000000-0000-0000-0000-000000000000"
+        assert (
+            gestion_acceso_service.verificar_permisos(usuario_inexistente, RolUsuario.ESTUDIANTE)
+            is False
+        )

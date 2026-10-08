@@ -21,6 +21,7 @@ def setup_database():
     Base.metadata.drop_all(bind=engine)
 
 
+@pytest.mark.e2e
 def test_rate_limit_login_6_req_429() -> None:
     """6 peticiones rápidas a /auth/login → 429 en la 6ta."""
     # Hacemos 6 peticiones seguidas con credenciales inválidas
@@ -39,6 +40,7 @@ def test_rate_limit_login_6_req_429() -> None:
             assert "Rate limit exceeded" in response.text or "rate limit" in response.text.lower()
 
 
+@pytest.mark.e2e
 def test_rate_limit_registro_6_req_429() -> None:
     """6 peticiones rápidas a /auth/registro → 429 en la 6ta."""
     for i in range(6):
@@ -59,6 +61,7 @@ def test_rate_limit_registro_6_req_429() -> None:
             assert "Rate limit exceeded" in response.text or "rate limit" in response.text.lower()
 
 
+@pytest.mark.e2e
 def test_cors_headers_presentes() -> None:
     """Verifica que Access-Control-Allow-Origin está presente en respuestas."""
     # Test con OPTIONS (preflight)

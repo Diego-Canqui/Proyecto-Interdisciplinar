@@ -34,6 +34,7 @@ def usuario_repo(db_session):
     return SqlUsuarioRepository(db_session)
 
 
+@pytest.mark.integration
 class TestSqlUsuarioRepository:
     """Tests para SqlUsuarioRepository."""
 
@@ -120,7 +121,7 @@ class TestSqlUsuarioRepository:
             correo="user2@example.com",
             telefono="+34 600 111 111",
             password_plano="Password123",
-            roles=[RolUsuario.PROFESOR],
+            roles=[RolUsuario.DOCENTE],
         )
         usuario_repo.guardar(usuario1)
         usuario_repo.guardar(usuario2)
@@ -138,7 +139,7 @@ class TestSqlUsuarioRepository:
             correo="test@example.com",
             telefono=None,
             password_plano="MySecretPass123",
-            roles=[RolUsuario.ADMIN, RolUsuario.BIBLIOTECARIO],
+            roles=[RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN],
         )
         guardado = usuario_repo.guardar(usuario)
 
@@ -148,7 +149,7 @@ class TestSqlUsuarioRepository:
         assert guardado.password_hash.startswith("$2b$12$")
 
         # Verificar que los roles se persisten como strings
-        assert guardado.roles == [RolUsuario.ADMIN, RolUsuario.BIBLIOTECARIO]
+        assert guardado.roles == [RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN]
 
         # Verificar que se puede verificar el password
         assert guardado.verificar_password("MySecretPass123") is True

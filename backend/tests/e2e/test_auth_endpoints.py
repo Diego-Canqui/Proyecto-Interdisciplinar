@@ -49,6 +49,7 @@ def _crear_token_expirado(usuario_id: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
+@pytest.mark.e2e
 class TestAuthRegistro:
     """Tests para POST /auth/registro."""
 
@@ -144,6 +145,7 @@ class TestAuthRegistro:
         assert response.status_code == 422
 
 
+@pytest.mark.e2e
 class TestAuthLogin:
     """Tests para POST /auth/login."""
 
@@ -196,6 +198,7 @@ class TestAuthLogin:
         assert response.json()["detail"] == "Credenciales inválidas"
 
 
+@pytest.mark.e2e
 class TestAuthLogout:
     """Tests para POST /auth/logout."""
 
@@ -206,6 +209,7 @@ class TestAuthLogout:
         assert response.json() == {"message": "Sesión cerrada"}
 
 
+@pytest.mark.e2e
 class TestAuthPerfil:
     """Tests para GET /auth/perfil."""
 
