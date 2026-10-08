@@ -10,6 +10,9 @@ from prestamos_recursos.contexts.catalogo.presentation.recurso_controller import
 from prestamos_recursos.contexts.identidad_reputacion.presentation.autenticacion_controller import (
     router as autenticacion_router,
 )
+from prestamos_recursos.contexts.identidad_reputacion.presentation.reputacion_controller import (
+    router as reputacion_router,
+)
 from prestamos_recursos.contexts.identidad_reputacion.presentation.usuario_controller import (
     router as usuario_router,
 )
@@ -46,6 +49,7 @@ def crear_tablas() -> None:
 
 app.include_router(autenticacion_router)
 app.include_router(usuario_router)
+app.include_router(reputacion_router)
 app.include_router(recurso_router)
 app.include_router(reserva_router)
 app.include_router(prestamo_router)
