@@ -2,22 +2,39 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from prestamos_recursos.contexts.identidad_reputacion.application.autenticacion_service import (
+    AutenticacionService,
+)
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import UsuarioDTO
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import RolUsuario
-from prestamos_recursos.contexts.identidad_reputacion.domain.repositories.usuario_repository import UsuarioRepository
+from prestamos_recursos.contexts.identidad_reputacion.domain.repositories.usuario_repository import (
+    UsuarioRepository,
+)
 
 
 class GestionAccesoService:
     """«Service» GestionAccesoService."""
 
-    def __init__(self, usuario_repository: UsuarioRepository) -> None:
-        self._usuario_repository = usuario_repository
+    def __init__(self, autenticacion_service: AutenticacionService) -> None:
+        self._autenticacion_service = autenticacion_service
+        self._usuario_repo: UsuarioRepository = autenticacion_service._usuario_repo
 
     def autenticar_jwt(self, token: str) -> bool:
-        raise NotImplementedError
+        """Valida un token JWT y retorna True si es válido, False en caso contrario. RF-10, RF-11"""
+        usuario_id = self._autenticacion_service.validar_token(token)
+        return usuario_id is not None
 
     def verificar_permisos(self, id_usuario: UUID, rol: RolUsuario) -> bool:
-        raise NotImplementedError
+        """
+        Verifica si un usuario tiene un rol específico.
 
-    def obtener_usuario_autenticado(self) -> UsuarioDTO:
-        raise NotImplementedError
+        Busca el usuario por ID y comprueba si el rol está en su lista de roles.
+        """
+        usuario = self._usuario_repo.obtener_por_id(id_usuario)
+        if usuario is None:
+            return False
+        return rol in usuario.roles
+
+    def obtener_usuario_autenticado(self, token: str) -> UsuarioDTO | None:
+        """Obtiene el usuario autenticado a partir de un token JWT. RF-10, RF-11"""
+        return self._autenticacion_service.obtener_usuario_por_token(token)

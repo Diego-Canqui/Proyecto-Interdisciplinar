@@ -26,6 +26,11 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+    "unit: tests unitarios (lógica pura dominio, sin BD)",
+    "integration: tests de integración (servicios + repos con BD real, requieren Docker)",
+    "e2e: tests end-to-end (endpoints HTTP, auth, rate limit, requieren Docker)",
+]
 
 [tool.ruff]
 line-length = 100
