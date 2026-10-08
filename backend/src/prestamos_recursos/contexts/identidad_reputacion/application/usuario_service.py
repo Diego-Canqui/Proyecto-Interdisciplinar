@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
+from prestamos_recursos.contexts.identidad_reputacion.application.dto.autenticacion_dto import (
     CrearUsuarioDTO,
+)
+from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
     UsuarioDTO,
 )
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.usuario import Usuario
-from prestamos_recursos.contexts.identidad_reputacion.domain.repositories.usuario_repository import UsuarioRepository
+from prestamos_recursos.contexts.identidad_reputacion.domain.repositories.usuario_repository import (
+    UsuarioRepository,
+)
 
 
 class UsuarioService:
