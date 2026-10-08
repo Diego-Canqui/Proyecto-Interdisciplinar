@@ -13,6 +13,9 @@ from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dt
 from prestamos_recursos.contexts.identidad_reputacion.application.gestion_acceso_service import (
     GestionAccesoService,
 )
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import (
+    RolUsuario,
+)
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_usuario_repository import (
     SqlUsuarioRepository,
 )
@@ -52,3 +55,30 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return usuario
+
+
+def require_roles(*roles_requeridos: RolUsuario):
+    """
+    Dependencia que verifica que el usuario actual tiene al menos uno de los roles requeridos.
+
+    Args:
+        *roles_requeridos: Uno o más roles de RolUsuario que autorizan el acceso.
+
+    Returns:
+        Callable que verifica los roles del current_user.
+
+    Raises:
+        HTTPException 403: Si el usuario no tiene ninguno de los roles requeridos.
+    """
+
+    def _verificar_roles(usuario: UsuarioDTO = Depends(get_current_user)) -> UsuarioDTO:  # noqa: B008
+        # Convertir roles del usuario (strings) a RolUsuario enum para comparar
+        roles_usuario = {RolUsuario(r) for r in usuario.roles}
+        if not any(rol in roles_usuario for rol in roles_requeridos):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tiene permisos para realizar esta acción",
+            )
+        return usuario
+
+    return _verificar_roles
