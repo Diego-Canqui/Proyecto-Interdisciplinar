@@ -1,6 +1,6 @@
 """Tests para la entidad ExcepcionAcademica (Aggregate Root)."""
 import pytest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_sancion import TipoSancion
@@ -167,6 +167,7 @@ class TestExcepcionAcademica:
             monto_descuento=Decimal("50"),
             motivo="Daño parcial",
             fecha_aplicacion=datetime.now(),
+            fecha_fin=datetime.now(UTC) + timedelta(days=30),  # vigente
             activa=True,
         )
         perfil.sanciones.append(sancion)

@@ -58,23 +58,32 @@ class PerfilReputacion(BaseEntity):
         self, excepciones_vigentes: list[ExcepcionAcademica] | None = None
     ) -> bool:
         """
-        Determina si el usuario es elegible para préstamo.
+        Determina si el usuario es elegible para préstamo (RF-01: sin bloqueo por nivel).
 
-        - False si nivel == BAJO
-        - False si existe sanción activa=True Y no hay excepción vigente que la cubra
-          (excepción vigente cubre TARDANZA e INASISTENCIA_RESERVA)
-        - True en caso contrario
+        - True si no existe ninguna sanción VIGENTE que no esté cubierta por una
+          excepción vigente (la excepción cubre TARDANZA e INASISTENCIA_RESERVA)
+        - False si existe alguna sanción vigente no cubierta
+        - El nivel de reputación NO participa: es insumo de prioridad de reservas
+        """
+        return self.sancion_bloqueante(excepciones_vigentes) is None
+
+    def sancion_bloqueante(
+        self, excepciones_vigentes: list[ExcepcionAcademica] | None = None
+    ) -> Sancion | None:
+        """
+        Retorna la primera sanción VIGENTE no cubierta por una excepción vigente,
+        o None si el perfil no tiene sanciones bloqueantes (RF-02, RF-15).
+
+        Sanción vigente: activa=True y fecha_fin > ahora (vigencia estricta).
+        La cobertura de excepciones alcanza TARDANZA e INASISTENCIA_RESERVA;
+        nunca DANO_PARCIAL ni DANO_TOTAL.
         """
         if excepciones_vigentes is None:
             excepciones_vigentes = []
 
-        # Nivel BAJO -> no elegible
-        if self.nivel == NivelReputacion.BAJO:
-            return False
-
-        # Verificar sanciones activas bloqueantes
+        # Verificar sanciones vigentes bloqueantes
         for sancion in self.sanciones:
-            if not sancion.activa:
+            if not sancion.esta_vigente():
                 continue
 
             # Verificar si hay alguna excepción vigente que cubra esta sanción
@@ -85,9 +94,9 @@ class PerfilReputacion(BaseEntity):
                     break
 
             if not cubre:
-                return False
+                return sancion
 
-        return True
+        return None
 
     def _excepcion_cubre_sancion(
         self, excepcion: ExcepcionAcademica, sancion: Sancion
