@@ -23,6 +23,15 @@ class PuntajeReputacion:
         """Sumar puntos y devolver nueva instancia validada."""
         return PuntajeReputacion(puntos=self.puntos + p)
 
+    def sumar_con_tope(self, p: int) -> PuntajeReputacion:
+        """Sumar puntos con clamp a 1000 y devolver nueva instancia (espejo del clamp a 0 de restar).
+
+        El tope es un caso normal de negocio (p. ej. premiar una devolución
+        puntual cerca del máximo), no un error.
+        """
+        nuevo_puntos = min(self.puntos + p, 1000)
+        return PuntajeReputacion(puntos=nuevo_puntos)
+
     def restar(self, p: int) -> PuntajeReputacion:
         """Restar puntos y devolver nueva instancia validada (clamp a 0 mínimo)."""
         nuevo_puntos = max(self.puntos - p, 0)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
@@ -97,6 +97,44 @@ class PerfilReputacion(BaseEntity):
                 return sancion
 
         return None
+
+    def premiar_puntualidad(self) -> None:
+        """Premia la puntualidad: +10 puntos con tope 1000 y recalcula el nivel (RF-10)."""
+        self.puntaje = self.puntaje.sumar_con_tope(10)
+        self.recalcular_nivel()
+
+    def aplicar_amnistia(self, ahora: datetime | None = None) -> bool:
+        """
+        Amnistía mensual (RF-11, RF-12): suma 25 puntos solo si el nivel es BAJO
+        y el perfil no tiene ninguna sanción aplicada en los últimos 30 días
+        (aunque esté expirada: la fecha que cuenta es fecha_aplicacion).
+
+        Recalcula el nivel y retorna True si premió; False si no procede.
+        La amnistía no desbloquea préstamos: solo recupera puntos (y prioridad).
+        """
+        # Mientras el nivel no sea BAJO no hay amnistía
+        if self.nivel != NivelReputacion.BAJO:
+            return False
+
+        if ahora is None:
+            ahora = datetime.now(UTC)
+        elif ahora.tzinfo is None:
+            # Normalizar ahora naive a UTC para comparación (manejar naive y aware)
+            ahora = ahora.replace(tzinfo=UTC)
+
+        # «Sin sanciones nuevas» = ninguna fecha_aplicacion >= ahora - 30 días
+        limite = ahora - timedelta(days=30)
+        for sancion in self.sanciones:
+            fecha_aplicacion = sancion.fecha_aplicacion
+            if fecha_aplicacion.tzinfo is None:
+                # Normalizar fecha a UTC para comparación (manejar naive y aware)
+                fecha_aplicacion = fecha_aplicacion.replace(tzinfo=UTC)
+            if fecha_aplicacion >= limite:
+                return False
+
+        self.puntaje = self.puntaje.sumar_con_tope(25)
+        self.recalcular_nivel()
+        return True
 
     def _excepcion_cubre_sancion(
         self, excepcion: ExcepcionAcademica, sancion: Sancion

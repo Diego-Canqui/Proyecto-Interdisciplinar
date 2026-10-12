@@ -635,6 +635,239 @@ class TestPerfilReputacion:
 
         assert perfil.sancion_bloqueante([]) is None
 
+    def test_premiar_puntualidad_suma_10_y_recalcula(self):
+        """premiar_puntualidad() debe sumar 10 puntos y recalcular el nivel (RF-10)."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=500),
+            nivel=NivelReputacion.NORMAL,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        perfil.premiar_puntualidad()
+
+        assert perfil.puntaje.puntos == 510
+        assert perfil.nivel == NivelReputacion.NORMAL
+        assert perfil.fecha_actualizacion is not None
+
+    def test_premiar_puntualidad_tope_1000(self):
+        """RF-10 (caso límite 8): 995 + premio → 1000, sin ValueError."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=995),
+            nivel=NivelReputacion.EXCELENTE,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        perfil.premiar_puntualidad()
+
+        assert perfil.puntaje.puntos == 1000
+        assert perfil.nivel == NivelReputacion.EXCELENTE
+
+    def test_premiar_puntualidad_sube_de_nivel(self):
+        """premiar_puntualidad() debe recalcular el nivel (595 → 605: NORMAL → BUENO)."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=595),
+            nivel=NivelReputacion.NORMAL,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        perfil.premiar_puntualidad()
+
+        assert perfil.puntaje.puntos == 605
+        assert perfil.nivel == NivelReputacion.BUENO
+
+    def test_aplicar_amnistia_suma_25_si_nivel_bajo(self):
+        """aplicar_amnistia() debe sumar 25 puntos a un perfil en BAJO sin sanciones (RF-11)."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=200),
+            nivel=NivelReputacion.BAJO,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        resultado = perfil.aplicar_amnistia(datetime.now(UTC))
+
+        assert resultado is True
+        assert perfil.puntaje.puntos == 225
+        assert perfil.nivel == NivelReputacion.BAJO
+
+    def test_aplicar_amnistia_cambia_nivel_bajo_a_normal(self):
+        """RF-11 (caso límite 10): 290 → 315 (BAJO → NORMAL); deja de ser elegible para futuras amnistías."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=290),
+            nivel=NivelReputacion.BAJO,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        assert perfil.aplicar_amnistia(datetime.now(UTC)) is True
+        assert perfil.puntaje.puntos == 315
+        assert perfil.nivel == NivelReputacion.NORMAL
+
+        # Ya no está en BAJO: la siguiente ejecución no lo premia (RF-12)
+        assert perfil.aplicar_amnistia(datetime.now(UTC)) is False
+        assert perfil.puntaje.puntos == 315
+
+    def test_aplicar_amnistia_falso_si_nivel_no_es_bajo(self):
+        """RF-12: mientras el nivel no sea BAJO, no se aplica amnistía."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=500),
+            nivel=NivelReputacion.NORMAL,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        assert perfil.aplicar_amnistia(datetime.now(UTC)) is False
+        assert perfil.puntaje.puntos == 500
+
+    def test_aplicar_amnistia_falso_si_sancion_aplicada_hace_menos_de_30_dias(self):
+        """RF-12 (caso límite 4): sanción aplicada hace <30 días (aunque expirada) → sin +25."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.sancion import Sancion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        ahora = datetime.now(UTC)
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=200),
+            nivel=NivelReputacion.BAJO,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        # Gracia de TARDANZA aplicada hace 10 días: ya expirada pero reciente
+        sancion_reciente = Sancion(
+            id=uuid4(),
+            tipo=TipoSancion.TARDANZA,
+            puntos_descuento=-10,
+            monto_descuento=Decimal("0"),
+            motivo="Tardanza con gracia",
+            fecha_aplicacion=ahora - timedelta(days=10),
+            fecha_fin=ahora - timedelta(days=10),  # expirada de inmediato
+            activa=True,
+        )
+        perfil.sanciones.append(sancion_reciente)
+
+        assert perfil.aplicar_amnistia(ahora) is False
+        assert perfil.puntaje.puntos == 200
+
+    def test_aplicar_amnistia_falso_si_sancion_aplicada_hace_exactamente_30_dias(self):
+        """Borde de la regla de 30 días: fecha_aplicacion == ahora - 30 días cuenta como reciente."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.sancion import Sancion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        ahora = datetime.now(UTC)
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=200),
+            nivel=NivelReputacion.BAJO,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        sancion = Sancion(
+            id=uuid4(),
+            tipo=TipoSancion.INASISTENCIA_RESERVA,
+            puntos_descuento=-15,
+            monto_descuento=Decimal("0"),
+            motivo="Inasistencia antigua",
+            fecha_aplicacion=ahora - timedelta(days=30),  # exactamente el límite
+            fecha_fin=ahora - timedelta(days=27),
+            activa=True,
+        )
+        perfil.sanciones.append(sancion)
+
+        assert perfil.aplicar_amnistia(ahora) is False
+        assert perfil.puntaje.puntos == 200
+
+    def test_aplicar_amnistia_verdadero_con_sanciones_antiguas_no_desbloquea(self):
+        """RF-12 (caso límite 5): sanción aplicada hace 35 días (aún vigente) → +25, pero sigue NO elegible."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.sancion import Sancion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        ahora = datetime.now(UTC)
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=200),
+            nivel=NivelReputacion.BAJO,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        # DANO_TOTAL aplicada hace 35 días: bloqueo 60 → sigue vigente
+        sancion_antigua_vigente = Sancion(
+            id=uuid4(),
+            tipo=TipoSancion.DANO_TOTAL,
+            puntos_descuento=-100,
+            monto_descuento=Decimal("0"),
+            motivo="Recurso destruido",
+            fecha_aplicacion=ahora - timedelta(days=35),
+            fecha_fin=ahora + timedelta(days=25),  # 35 + 60 días de bloqueo
+            activa=True,
+        )
+        perfil.sanciones.append(sancion_antigua_vigente)
+
+        assert perfil.aplicar_amnistia(ahora) is True
+        assert perfil.puntaje.puntos == 225
+
+        # La amnistía recupera puntos, no desbloquea préstamos
+        assert perfil.es_elegible_para_prestamo([]) is False
+
+    def test_aplicar_amnistia_dos_ejecuciones_suman_cada_una(self):
+        """RF-11 (caso límite 9): +25 por cada ejecución; la cadencia la aporta el proceso disparador."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            puntaje=PuntajeReputacion(puntos=200),
+            nivel=NivelReputacion.BAJO,
+            fecha_actualizacion=datetime.now(),
+            sanciones=[],
+        )
+
+        assert perfil.aplicar_amnistia(datetime.now(UTC)) is True
+        assert perfil.aplicar_amnistia(datetime.now(UTC)) is True
+        assert perfil.puntaje.puntos == 250
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -17,24 +17,26 @@ class ExcepcionAcademica(BaseEntity):
     fecha_fin: datetime
     activa: bool = True
 
-    def aprobar(self) -> None:
-        """Marca la excepción como aprobada (activa=True)."""
-        self.activa = True
-
-    def rechazar(self) -> None:
-        """Marca la excepción como rechazada (activa=False)."""
+    def anular(self) -> None:
+        """Marca la excepción como anulada (activa=False), p. ej. si se registró por error (RF-22)."""
         self.activa = False
 
-    def es_vigente(self) -> bool:
+    def es_vigente(self, ahora: datetime | None = None) -> bool:
         """
         Retorna True si la excepción está vigente:
         - activa == True
-        - fecha_inicio <= now <= fecha_fin
+        - fecha_inicio <= ahora <= fecha_fin (INCLUSIVA, a diferencia de la
+          vigencia estricta de las sanciones — RF-14)
         """
         if not self.activa:
             return False
 
-        ahora = datetime.now(UTC)
+        if ahora is None:
+            ahora = datetime.now(UTC)
+        elif ahora.tzinfo is None:
+            # Normalizar ahora naive a UTC para comparación (manejar naive y aware)
+            ahora = ahora.replace(tzinfo=UTC)
+
         # Normalizar fechas a UTC para comparación (manejar naive y aware)
         inicio = self.fecha_inicio
         fin = self.fecha_fin

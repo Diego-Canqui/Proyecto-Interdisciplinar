@@ -6,6 +6,7 @@ from uuid import uuid4
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_sancion import TipoSancion
 
 
+@pytest.mark.unit
 class TestExcepcionAcademica:
     """Tests para ExcepcionAcademica."""
 
@@ -73,39 +74,82 @@ class TestExcepcionAcademica:
 
         assert excepcion.es_vigente() is False
 
-    def test_aprobar_pone_activa_true(self):
-        """aprobar() debe poner activa=True."""
+    def test_anular_pone_activa_false(self):
+        """anular() debe poner activa=False (RF-14/RF-22: reemplaza a aprobar/rechazar)."""
         from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import ExcepcionAcademica
 
+        ahora = datetime.now(UTC)
         excepcion = ExcepcionAcademica(
             id=uuid4(),
             usuario_id=uuid4(),
-            motivo="Examen",
-            fecha_inicio=datetime.now(),
-            fecha_fin=datetime.now() + timedelta(days=1),
-            activa=False,
-        )
-
-        excepcion.aprobar()
-
-        assert excepcion.activa is True
-
-    def test_rechazar_pone_activa_false(self):
-        """rechazar() debe poner activa=False."""
-        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import ExcepcionAcademica
-
-        excepcion = ExcepcionAcademica(
-            id=uuid4(),
-            usuario_id=uuid4(),
-            motivo="Examen",
-            fecha_inicio=datetime.now(),
-            fecha_fin=datetime.now() + timedelta(days=1),
+            motivo="Examen registrado por error",
+            fecha_inicio=ahora - timedelta(days=1),
+            fecha_fin=ahora + timedelta(days=1),
             activa=True,
         )
 
-        excepcion.rechazar()
+        excepcion.anular()
 
         assert excepcion.activa is False
+        assert excepcion.es_vigente() is False
+
+    def test_anular_sobre_ya_anulada_mantiene_anulada(self):
+        """anular() sobre una excepción ya anulada no cambia su estado (idempotente a nivel entidad)."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import ExcepcionAcademica
+
+        ahora = datetime.now(UTC)
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Examen registrado por error",
+            fecha_inicio=ahora - timedelta(days=1),
+            fecha_fin=ahora + timedelta(days=1),
+            activa=False,
+        )
+
+        excepcion.anular()
+
+        assert excepcion.activa is False
+        assert excepcion.es_vigente() is False
+
+    def test_aprobar_y_rechazar_no_existen(self):
+        """RF-14: sin flujo de aprobación; la entidad deja de ofrecer aprobar() y rechazar()."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import ExcepcionAcademica
+
+        assert not hasattr(ExcepcionAcademica, "aprobar")
+        assert not hasattr(ExcepcionAcademica, "rechazar")
+
+    def test_es_vigente_inclusiva_borde_fecha_fin_igual_a_ahora(self):
+        """RF-14 (vigencia inclusiva): fecha_fin == ahora → sigue vigente (a diferencia de las sanciones)."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import ExcepcionAcademica
+
+        ahora = datetime.now(UTC)
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Examen",
+            fecha_inicio=ahora - timedelta(days=1),
+            fecha_fin=ahora,  # exactamente el instante de evaluación
+            activa=True,
+        )
+
+        assert excepcion.es_vigente(ahora) is True
+
+    def test_es_vigente_inclusiva_borde_fecha_inicio_igual_a_ahora(self):
+        """RF-14 (vigencia inclusiva): fecha_inicio == ahora → vigente."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import ExcepcionAcademica
+
+        ahora = datetime.now(UTC)
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Examen que empieza ahora",
+            fecha_inicio=ahora,  # exactamente el instante de evaluación
+            fecha_fin=ahora + timedelta(days=1),
+            activa=True,
+        )
+
+        assert excepcion.es_vigente(ahora) is True
 
     def test_cubre_tardanza_si_vigente(self):
         """Excepción vigente debe cubrir sanciones de tipo TARDANZA."""
