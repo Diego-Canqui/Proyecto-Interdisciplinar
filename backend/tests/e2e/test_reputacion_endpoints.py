@@ -12,7 +12,7 @@ from jose import jwt
 
 from prestamos_recursos.config import settings
 from prestamos_recursos.main import app
-from prestamos_recursos.shared.database import Base, SessionLocal, engine
+from prestamos_recursos.shared.database import Base, engine
 
 client = TestClient(app)
 
@@ -71,73 +71,6 @@ def _registrar_y_login(datos: dict | None = None) -> tuple[str, dict]:
     token = response_login.json()["token"]
     usuario = response_login.json()["usuario"]
     return token, usuario
-
-
-def _sembrar_sancion(usuario_id: str, tipo: str = "TARDANZA", dias_retardo: int = 5) -> None:
-    """Siembra una sanción persistida para preparar el estado previo de un test E2E.
-
-    La dependencia `get_session` no confirma la transacción (los repositorios de
-    perfil y excepción solo hacen flush), así que el estado anterior a una
-    petición HTTP se prepara con una sesión propia que sí hace commit.
-    """
-    from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
-        ReputacionService,
-    )
-    from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_sancion import (
-        TipoSancion,
-    )
-    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
-        SqlExcepcionAcademicaRepository,
-    )
-    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_perfil_reputacion_repository import (
-        SqlPerfilReputacionRepository,
-    )
-    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_usuario_repository import (
-        SqlUsuarioRepository,
-    )
-
-    with SessionLocal() as session:
-        service = ReputacionService(
-            SqlPerfilReputacionRepository(session),
-            SqlExcepcionAcademicaRepository(session),
-            SqlUsuarioRepository(session),
-        )
-        service.aplicar_sancion(
-            UUID(usuario_id), TipoSancion(tipo), "siembra de test", dias_retardo=dias_retardo
-        )
-        session.commit()
-
-
-def _sembrar_excepcion(usuario_id: str, motivo: str = "Examen final") -> str:
-    """Siembra una excepción vigente persistida y devuelve su id (ver _sembrar_sancion)."""
-    from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
-        ReputacionService,
-    )
-    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
-        SqlExcepcionAcademicaRepository,
-    )
-    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_perfil_reputacion_repository import (
-        SqlPerfilReputacionRepository,
-    )
-    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_usuario_repository import (
-        SqlUsuarioRepository,
-    )
-
-    ahora = datetime.now(UTC)
-    with SessionLocal() as session:
-        service = ReputacionService(
-            SqlPerfilReputacionRepository(session),
-            SqlExcepcionAcademicaRepository(session),
-            SqlUsuarioRepository(session),
-        )
-        excepcion = service.registrar_excepcion(
-            UUID(usuario_id),
-            motivo,
-            ahora - timedelta(days=1),
-            ahora + timedelta(days=7),
-        )
-        session.commit()
-        return str(excepcion.id)
 
 
 @pytest.mark.e2e
@@ -459,11 +392,28 @@ class TestReputacionElegibilidad:
 
     def test_get_reputacion_elegibilidad_con_sancion_vigente_incluye_razon(self) -> None:
         """RF-21: con una sanción vigente no es elegible y la razón incluye el tipo."""
-        token, usuario = _registrar_y_login()
-        _sembrar_sancion(usuario["id"], "TARDANZA", dias_retardo=5)
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        datos_victima = _crear_usuario_ejemplo()
+        datos_victima["correo"] = "victima_elegibilidad@example.com"
+        token_victima, victima = _registrar_y_login(datos_victima)
+
+        # T8b: la sanción se crea por la vía API (ya persiste entre peticiones)
+        response_sancion = client.post(
+            "/reputacion/sanciones",
+            json={
+                "usuario_id": victima["id"],
+                "tipo": "TARDANZA",
+                "motivo": "Devolución tardía de recurso",
+                "dias_retardo": 5,
+            },
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert response_sancion.status_code == 201
 
         response = client.get(
-            "/reputacion/elegibilidad", headers={"Authorization": f"Bearer {token}"}
+            "/reputacion/elegibilidad", headers={"Authorization": f"Bearer {token_victima}"}
         )
 
         assert response.status_code == 200
@@ -524,7 +474,21 @@ class TestReputacionAnularExcepcion:
         datos_victima = _crear_usuario_ejemplo()
         datos_victima["correo"] = "victima_anular@example.com"
         _, victima = _registrar_y_login(datos_victima)
-        excepcion_id = _sembrar_excepcion(victima["id"])
+
+        # T8b: la excepción se crea por la vía API (ya persiste entre peticiones)
+        ahora = datetime.now(UTC)
+        response_excepcion = client.post(
+            "/reputacion/excepciones",
+            json={
+                "usuario_id": victima["id"],
+                "motivo": "Examen final",
+                "fecha_inicio": (ahora - timedelta(days=1)).isoformat(),
+                "fecha_fin": (ahora + timedelta(days=7)).isoformat(),
+            },
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert response_excepcion.status_code == 201
+        excepcion_id = response_excepcion.json()["id"]
 
         response = client.post(
             f"/reputacion/excepciones/{excepcion_id}/anular",
@@ -573,6 +537,52 @@ class TestReputacionAnularExcepcion:
             "/reputacion/excepciones/00000000-0000-0000-0000-000000000000/anular"
         )
         assert response.status_code == 401
+
+
+@pytest.mark.e2e
+class TestPersistenciaEntrePeticiones:
+    """T8b: la frontera de transacción por petición (D13) persiste lo escrito.
+
+    Antes de T8b, `get_session` cerraba la sesión revirtiendo: una sanción devuelta
+    con 201 se perdía y la lectura posterior mostraba un perfil vacío.
+    """
+
+    def test_post_sanciones_y_get_perfil_en_peticiones_distintas_persiste(self) -> None:
+        """RF-08/RF-21 (T8b): sanción escrita en una petición y leída en otra (peticiones distintas)."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        datos_victima = _crear_usuario_ejemplo()
+        datos_victima["correo"] = "victima_persistencia@example.com"
+        token_victima, victima = _registrar_y_login(datos_victima)
+
+        # Petición 1: aplicar la sanción
+        body = {
+            "usuario_id": victima["id"],
+            "tipo": "TARDANZA",
+            "motivo": "Devolución tardía de recurso",
+            "dias_retardo": 5,
+        }
+        response_sancion = client.post(
+            "/reputacion/sanciones",
+            json=body,
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert response_sancion.status_code == 201
+        sancion_id = response_sancion.json()["id"]
+
+        # Petición 2 (distinta): el perfil de la víctima ya incluye la sanción
+        response_perfil = client.get(
+            "/reputacion/perfil", headers={"Authorization": f"Bearer {token_victima}"}
+        )
+
+        assert response_perfil.status_code == 200
+        perfil = response_perfil.json()
+        assert perfil["usuario_id"] == victima["id"]
+        assert perfil["puntaje"] == 490  # 500 - 10 (TARDANZA)
+        assert len(perfil["sanciones"]) == 1
+        assert perfil["sanciones"][0]["id"] == sancion_id
+        assert perfil["sanciones"][0]["fecha_fin"] is not None
 
 
 @pytest.mark.e2e

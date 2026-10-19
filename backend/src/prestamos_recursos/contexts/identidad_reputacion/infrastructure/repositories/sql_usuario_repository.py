@@ -33,7 +33,9 @@ class SqlUsuarioRepository(UsuarioRepository):
             modelo.password_hash = usuario.password_hash
             modelo.estado = usuario.estado
             modelo.roles = [rol.value for rol in usuario.roles]
-        self._session.commit()
+        # La transacción la cierra get_session al final de la petición (D13):
+        # aquí solo se deja el cambio listo y visible en la sesión (flush)
+        self._session.flush()
         # Retornar la entidad con ID (refrescar para obtener valores generados por BD)
         self._session.refresh(modelo)
         return modelo.to_entity()
