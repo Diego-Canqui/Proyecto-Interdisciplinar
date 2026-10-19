@@ -9,6 +9,9 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_rep
     PerfilReputacion,
 )
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.sancion import Sancion
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
+    NivelReputacion,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.repositories.perfil_reputacion_repository import (
     PerfilReputacionRepository,
 )
@@ -96,6 +99,12 @@ class SqlPerfilReputacionRepository(PerfilReputacionRepository):
             return None
         return self._modelo_a_perfil(modelo)
 
+    def obtener_por_nivel(self, nivel: NivelReputacion) -> list[PerfilReputacion]:
+        """Obtiene todos los perfiles de un nivel (RF-11: insumo de la amnistía mensual)."""
+        stmt = select(PerfilReputacionModel).where(PerfilReputacionModel.nivel == nivel)
+        modelos = self._session.execute(stmt).scalars().all()
+        return [self._modelo_a_perfil(modelo) for modelo in modelos]
+
     def _perfil_a_modelo(self, perfil: PerfilReputacion) -> PerfilReputacionModel:
         """Convierte entidad de dominio a modelo ORM (nuevo)."""
         return PerfilReputacionModel(
@@ -119,6 +128,7 @@ class SqlPerfilReputacionRepository(PerfilReputacionRepository):
             monto_descuento=sancion.monto_descuento,
             motivo=sancion.motivo,
             fecha_aplicacion=sancion.fecha_aplicacion,
+            fecha_fin=sancion.fecha_fin,
             activa=sancion.activa,
         )
 
@@ -131,6 +141,7 @@ class SqlPerfilReputacionRepository(PerfilReputacionRepository):
         modelo.monto_descuento = sancion.monto_descuento
         modelo.motivo = sancion.motivo
         modelo.fecha_aplicacion = sancion.fecha_aplicacion
+        modelo.fecha_fin = sancion.fecha_fin
         modelo.activa = sancion.activa
 
     def _modelo_a_perfil(self, modelo: PerfilReputacionModel) -> PerfilReputacion:
@@ -147,6 +158,7 @@ class SqlPerfilReputacionRepository(PerfilReputacionRepository):
                 monto_descuento=s.monto_descuento,
                 motivo=s.motivo,
                 fecha_aplicacion=s.fecha_aplicacion,
+                fecha_fin=s.fecha_fin,
                 activa=s.activa,
             )
             for s in modelo.sanciones
