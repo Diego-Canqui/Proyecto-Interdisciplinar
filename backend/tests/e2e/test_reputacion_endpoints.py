@@ -12,7 +12,7 @@ from jose import jwt
 
 from prestamos_recursos.config import settings
 from prestamos_recursos.main import app
-from prestamos_recursos.shared.database import Base, engine
+from prestamos_recursos.shared.database import Base, SessionLocal, engine
 
 client = TestClient(app)
 
@@ -22,9 +22,9 @@ def setup_database():
     """Crear tablas antes de cada test y limpiar después."""
     # Import models to register them
     from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models import (  # noqa: F401
-        usuario_model,
-        perfil_reputacion_model,
         excepcion_academica_model,
+        perfil_reputacion_model,
+        usuario_model,
     )
     Base.metadata.create_all(bind=engine)
     yield
@@ -73,6 +73,73 @@ def _registrar_y_login(datos: dict | None = None) -> tuple[str, dict]:
     return token, usuario
 
 
+def _sembrar_sancion(usuario_id: str, tipo: str = "TARDANZA", dias_retardo: int = 5) -> None:
+    """Siembra una sanción persistida para preparar el estado previo de un test E2E.
+
+    La dependencia `get_session` no confirma la transacción (los repositorios de
+    perfil y excepción solo hacen flush), así que el estado anterior a una
+    petición HTTP se prepara con una sesión propia que sí hace commit.
+    """
+    from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
+        ReputacionService,
+    )
+    from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_sancion import (
+        TipoSancion,
+    )
+    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
+        SqlExcepcionAcademicaRepository,
+    )
+    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_perfil_reputacion_repository import (
+        SqlPerfilReputacionRepository,
+    )
+    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_usuario_repository import (
+        SqlUsuarioRepository,
+    )
+
+    with SessionLocal() as session:
+        service = ReputacionService(
+            SqlPerfilReputacionRepository(session),
+            SqlExcepcionAcademicaRepository(session),
+            SqlUsuarioRepository(session),
+        )
+        service.aplicar_sancion(
+            UUID(usuario_id), TipoSancion(tipo), "siembra de test", dias_retardo=dias_retardo
+        )
+        session.commit()
+
+
+def _sembrar_excepcion(usuario_id: str, motivo: str = "Examen final") -> str:
+    """Siembra una excepción vigente persistida y devuelve su id (ver _sembrar_sancion)."""
+    from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
+        ReputacionService,
+    )
+    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
+        SqlExcepcionAcademicaRepository,
+    )
+    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_perfil_reputacion_repository import (
+        SqlPerfilReputacionRepository,
+    )
+    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_usuario_repository import (
+        SqlUsuarioRepository,
+    )
+
+    ahora = datetime.now(UTC)
+    with SessionLocal() as session:
+        service = ReputacionService(
+            SqlPerfilReputacionRepository(session),
+            SqlExcepcionAcademicaRepository(session),
+            SqlUsuarioRepository(session),
+        )
+        excepcion = service.registrar_excepcion(
+            UUID(usuario_id),
+            motivo,
+            ahora - timedelta(days=1),
+            ahora + timedelta(days=7),
+        )
+        session.commit()
+        return str(excepcion.id)
+
+
 @pytest.mark.e2e
 class TestReputacionPerfil:
     """Tests para GET /reputacion/perfil."""
@@ -109,7 +176,7 @@ class TestReputacionPerfil:
 
     def test_get_reputacion_perfil_token_expirado_401(self) -> None:
         """RF-18: GET /reputacion/perfil con token expirado retorna 401."""
-        token, usuario = _registrar_y_login()
+        _token, usuario = _registrar_y_login()
         token_expirado = _crear_token(usuario["id"], expirado=True)
 
         response = client.get(
@@ -125,21 +192,22 @@ class TestReputacionSanciones:
     """Tests para POST /reputacion/sanciones."""
 
     def test_post_reputacion_sanciones_admin_201(self) -> None:
-        """RF-20: POST /reputacion/sanciones con rol ADMINISTRADOR_SISTEMA retorna 201."""
+        """RF-08: POST /reputacion/sanciones con rol ADMINISTRADOR_SISTEMA retorna 201 con SancionDTO real."""
         # Crear usuario admin
         datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
-        token_admin, admin = _registrar_y_login(datos_admin)
+        token_admin, _ = _registrar_y_login(datos_admin)
 
         # Crear usuario víctima
         datos_victima = _crear_usuario_ejemplo()
         datos_victima["correo"] = "victima@example.com"
         _, victima = _registrar_y_login(datos_victima)
 
-        # Aplicar sanción como admin
+        # Aplicar sanción como admin (TARDANZA exige dias_retardo >= 1 — RF-07)
         body = {
             "usuario_id": victima["id"],
             "tipo": "TARDANZA",
             "motivo": "Devolución tardía de recurso",
+            "dias_retardo": 5,
         }
         response = client.post(
             "/reputacion/sanciones",
@@ -148,17 +216,66 @@ class TestReputacionSanciones:
         )
 
         assert response.status_code == 201
-        # Verificar que el perfil de la víctima se actualizó
-        response_perfil = client.get(
-            "/reputacion/perfil", headers={"Authorization": f"Bearer {token_admin}"}
+        data = response.json()
+
+        # RF-08: la respuesta es la sanción real (no un DTO ficticio de confirmación)
+        assert UUID(data["id"])
+        assert data["tipo"] == "TARDANZA"
+        assert data["puntos_descuento"] == -10
+        assert Decimal(str(data["monto_descuento"])) == Decimal(0)
+        assert data["motivo"] == "Devolución tardía de recurso"
+        assert data["activa"] is True
+        assert data["vigente"] is True
+        # RF-03/RF-05: fecha_fin derivada de la duración de bloqueo (5 días de retraso)
+        fecha_aplicacion = datetime.fromisoformat(data["fecha_aplicacion"])
+        fecha_fin = datetime.fromisoformat(data["fecha_fin"])
+        assert fecha_fin - fecha_aplicacion == timedelta(days=5)
+
+    def test_post_reputacion_sanciones_tardanza_sin_dias_retardo_422(self) -> None:
+        """RF-07: TARDANZA sin dias_retardo retorna 422 (validación del DTO)."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        datos_victima = _crear_usuario_ejemplo()
+        datos_victima["correo"] = "victima_sin_retardo@example.com"
+        _, victima = _registrar_y_login(datos_victima)
+
+        body = {
+            "usuario_id": victima["id"],
+            "tipo": "TARDANZA",
+            "motivo": "Tardanza sin días de retraso",
+        }
+        response = client.post(
+            "/reputacion/sanciones",
+            json=body,
+            headers={"Authorization": f"Bearer {token_admin}"},
         )
-        # Note: This checks admin's own profile. To check victim's profile,
-        # we'd need victim's token. Let's just verify the endpoint works.
+
+        assert response.status_code == 422
+
+    def test_post_reputacion_sanciones_usuario_inexistente_404(self) -> None:
+        """RF-23: sancionar a un usuario inexistente retorna 404 (UsuarioNoEncontrado)."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        body = {
+            "usuario_id": "00000000-0000-0000-0000-000000000000",
+            "tipo": "TARDANZA",
+            "motivo": "Usuario inexistente",
+            "dias_retardo": 3,
+        }
+        response = client.post(
+            "/reputacion/sanciones",
+            json=body,
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+
+        assert response.status_code == 404
 
     def test_post_reputacion_sanciones_gestor_almacen_201(self) -> None:
         """RF-20: POST /reputacion/sanciones con rol GESTOR_ALMACEN retorna 201."""
         datos_gestor = _crear_usuario_ejemplo(roles=["GESTOR_ALMACEN"])
-        token_gestor, gestor = _registrar_y_login(datos_gestor)
+        token_gestor, _ = _registrar_y_login(datos_gestor)
 
         datos_victima = _crear_usuario_ejemplo()
         datos_victima["correo"] = "victima2@example.com"
@@ -179,7 +296,7 @@ class TestReputacionSanciones:
 
     def test_post_reputacion_sanciones_sin_rol_admin_403(self) -> None:
         """RF-20: POST /reputacion/sanciones sin rol admin/gestor retorna 403."""
-        token_estudiante, estudiante = _registrar_y_login()
+        token_estudiante, _ = _registrar_y_login()
 
         datos_victima = _crear_usuario_ejemplo()
         datos_victima["correo"] = "victima3@example.com"
@@ -216,7 +333,7 @@ class TestReputacionExcepciones:
     def test_post_reputacion_excepciones_admin_201(self) -> None:
         """RF-21: POST /reputacion/excepciones con rol ADMINISTRADOR_SISTEMA retorna 201."""
         datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
-        token_admin, admin = _registrar_y_login(datos_admin)
+        token_admin, _ = _registrar_y_login(datos_admin)
 
         datos_victima = _crear_usuario_ejemplo()
         datos_victima["correo"] = "victima4@example.com"
@@ -246,7 +363,7 @@ class TestReputacionExcepciones:
     def test_post_reputacion_excepciones_gestor_almacen_201(self) -> None:
         """RF-21: POST /reputacion/excepciones con rol GESTOR_ALMACEN retorna 201."""
         datos_gestor = _crear_usuario_ejemplo(roles=["GESTOR_ALMACEN"])
-        token_gestor, gestor = _registrar_y_login(datos_gestor)
+        token_gestor, _ = _registrar_y_login(datos_gestor)
 
         datos_victima = _crear_usuario_ejemplo()
         datos_victima["correo"] = "victima5@example.com"
@@ -269,7 +386,7 @@ class TestReputacionExcepciones:
 
     def test_post_reputacion_excepciones_sin_rol_admin_403(self) -> None:
         """RF-21: POST /reputacion/excepciones sin rol admin/gestor retorna 403."""
-        token_estudiante, estudiante = _registrar_y_login()
+        token_estudiante, _ = _registrar_y_login()
 
         datos_victima = _crear_usuario_ejemplo()
         datos_victima["correo"] = "victima6@example.com"
@@ -302,6 +419,161 @@ class TestReputacionExcepciones:
         response = client.post("/reputacion/excepciones", json=body)
         assert response.status_code == 401
 
+    def test_post_reputacion_excepciones_usuario_inexistente_404(self) -> None:
+        """RF-23: registrar una excepción para un usuario inexistente retorna 404."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        ahora = datetime.now(UTC)
+        body = {
+            "usuario_id": "00000000-0000-0000-0000-000000000000",
+            "motivo": "Usuario inexistente",
+            "fecha_inicio": (ahora - timedelta(days=1)).isoformat(),
+            "fecha_fin": (ahora + timedelta(days=7)).isoformat(),
+        }
+        response = client.post(
+            "/reputacion/excepciones",
+            json=body,
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+
+        assert response.status_code == 404
+
+
+@pytest.mark.e2e
+class TestReputacionElegibilidad:
+    """Tests para GET /reputacion/elegibilidad (RF-21)."""
+
+    def test_get_reputacion_elegibilidad_200_sin_razon(self) -> None:
+        """RF-21: sin sanciones bloqueantes es elegible y no hay razón."""
+        token, _ = _registrar_y_login()
+
+        response = client.get(
+            "/reputacion/elegibilidad", headers={"Authorization": f"Bearer {token}"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["elegible"] is True
+        assert data["razon"] is None
+
+    def test_get_reputacion_elegibilidad_con_sancion_vigente_incluye_razon(self) -> None:
+        """RF-21: con una sanción vigente no es elegible y la razón incluye el tipo."""
+        token, usuario = _registrar_y_login()
+        _sembrar_sancion(usuario["id"], "TARDANZA", dias_retardo=5)
+
+        response = client.get(
+            "/reputacion/elegibilidad", headers={"Authorization": f"Bearer {token}"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["elegible"] is False
+        assert data["razon"] is not None
+        assert "TARDANZA" in data["razon"]
+
+    def test_get_reputacion_elegibilidad_sin_token_401(self) -> None:
+        """RF-21: GET /reputacion/elegibilidad sin token retorna 401."""
+        response = client.get("/reputacion/elegibilidad")
+        assert response.status_code == 401
+
+
+@pytest.mark.e2e
+class TestReputacionAmnistia:
+    """Tests para POST /reputacion/amnistia (RF-13)."""
+
+    def test_post_reputacion_amnistia_admin_200(self) -> None:
+        """RF-13: con rol de gestión retorna 200 con el conteo (0 es un valor válido)."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        response = client.post(
+            "/reputacion/amnistia", headers={"Authorization": f"Bearer {token_admin}"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data["perfiles_premiados"], int)
+        assert data["perfiles_premiados"] == 0  # ningún perfil BAJO persistido
+
+    def test_post_reputacion_amnistia_sin_rol_403(self) -> None:
+        """RF-13: sin rol de gestión retorna 403."""
+        token_estudiante, _ = _registrar_y_login()
+
+        response = client.post(
+            "/reputacion/amnistia", headers={"Authorization": f"Bearer {token_estudiante}"}
+        )
+
+        assert response.status_code == 403
+
+    def test_post_reputacion_amnistia_sin_token_401(self) -> None:
+        """RF-13: sin token retorna 401."""
+        response = client.post("/reputacion/amnistia")
+        assert response.status_code == 401
+
+
+@pytest.mark.e2e
+class TestReputacionAnularExcepcion:
+    """Tests para POST /reputacion/excepciones/{id}/anular (RF-22)."""
+
+    def test_post_reputacion_anular_excepcion_admin_200(self) -> None:
+        """RF-22: anular una excepción existente retorna 200 con activa=False (idempotente)."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        datos_victima = _crear_usuario_ejemplo()
+        datos_victima["correo"] = "victima_anular@example.com"
+        _, victima = _registrar_y_login(datos_victima)
+        excepcion_id = _sembrar_excepcion(victima["id"])
+
+        response = client.post(
+            f"/reputacion/excepciones/{excepcion_id}/anular",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == excepcion_id
+        assert data["activa"] is False
+
+        # Idempotente: anular de nuevo sigue siendo 200
+        response_otra_vez = client.post(
+            f"/reputacion/excepciones/{excepcion_id}/anular",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert response_otra_vez.status_code == 200
+        assert response_otra_vez.json()["activa"] is False
+
+    def test_post_reputacion_anular_excepcion_inexistente_404(self) -> None:
+        """RF-22: anular una excepción inexistente retorna 404 (ExcepcionNoEncontrada)."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        response = client.post(
+            "/reputacion/excepciones/00000000-0000-0000-0000-000000000000/anular",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+
+        assert response.status_code == 404
+
+    def test_post_reputacion_anular_excepcion_sin_rol_403(self) -> None:
+        """RF-22: sin rol de gestión retorna 403."""
+        token_estudiante, _ = _registrar_y_login()
+
+        response = client.post(
+            "/reputacion/excepciones/00000000-0000-0000-0000-000000000000/anular",
+            headers={"Authorization": f"Bearer {token_estudiante}"},
+        )
+
+        assert response.status_code == 403
+
+    def test_post_reputacion_anular_excepcion_sin_token_401(self) -> None:
+        """RF-22: sin token retorna 401."""
+        response = client.post(
+            "/reputacion/excepciones/00000000-0000-0000-0000-000000000000/anular"
+        )
+        assert response.status_code == 401
+
 
 @pytest.mark.e2e
 class TestRequireRoles:
@@ -312,4 +584,3 @@ class TestRequireRoles:
         # This is tested indirectly via the sanciones/excepciones tests above
         # but we can also test it directly if we expose a test endpoint
         # For now, the indirect test via POST /reputacion/sanciones is sufficient
-        pass
