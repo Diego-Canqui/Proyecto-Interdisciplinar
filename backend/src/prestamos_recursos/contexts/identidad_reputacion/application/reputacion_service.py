@@ -5,11 +5,13 @@ from decimal import Decimal
 from uuid import UUID
 
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+    ElegibilidadDTO,
     ExcepcionAcademicaDTO,
     PerfilReputacionDTO,
     SancionDTO,
 )
 from prestamos_recursos.contexts.identidad_reputacion.application.excepciones import (
+    ExcepcionNoEncontrada,
     SancionInvalida,
     UsuarioNoEncontrado,
 )
@@ -20,6 +22,9 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_rep
     PerfilReputacion,
 )
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.sancion import Sancion
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
+    NivelReputacion,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_sancion import TipoSancion
 from prestamos_recursos.contexts.identidad_reputacion.domain.repositories.excepcion_academica_repository import (
     ExcepcionAcademicaRepository,
@@ -84,6 +89,39 @@ class ReputacionService:
         # Delegar a la entidad de dominio
         return perfil.es_elegible_para_prestamo(excepciones_vigentes)
 
+    def obtener_elegibilidad(self, usuario_id: UUID) -> ElegibilidadDTO:
+        """
+        Consulta la elegibilidad del usuario con la razón del bloqueo (RF-21).
+
+        - El nivel de reputación no participa (RF-01)
+        - Perfil y excepciones se obtienen con el mismo criterio que
+          es_elegible_para_prestamo (sin perfil → se crea y es elegible)
+        - Si no es elegible, la razón incluye el tipo de la sanción bloqueante y su
+          fecha de fin en lenguaje de negocio (D9: el dominio dice QUÉ bloquea,
+          el servicio redacta la razón)
+        """
+        perfil = self._perfil_reputacion_repository.obtener_por_usuario(usuario_id)
+
+        if perfil is None:
+            # Si no tiene perfil, se crea uno (factory) y es elegible (NORMAL, sin sanciones)
+            perfil = PerfilReputacion.crear_para_usuario(usuario_id)
+            self._perfil_reputacion_repository.guardar(perfil)
+
+        excepciones_vigentes = self._excepcion_academica_repository.obtener_vigentes_por_usuario(
+            usuario_id
+        )
+
+        sancion_bloqueante = perfil.sancion_bloqueante(excepciones_vigentes)
+
+        if sancion_bloqueante is None:
+            return ElegibilidadDTO(elegible=True)
+
+        razon = (
+            f"tienes una sanción vigente de tipo {sancion_bloqueante.tipo.value} "
+            f"hasta {sancion_bloqueante.fecha_fin:%Y-%m-%d}"
+        )
+        return ElegibilidadDTO(elegible=False, razon=razon)
+
     def aplicar_sancion(
         self,
         usuario_id: UUID,
@@ -133,6 +171,46 @@ class ReputacionService:
 
         return SancionDTO.from_entity(sancion)
 
+    def premiar_devolucion_puntual(self, usuario_id: UUID) -> None:
+        """
+        Premia la devolución puntual de un usuario (RF-10).
+
+        - RF-23: verifica que el usuario exista antes de operar (sin perfiles huérfanos)
+        - Autocrea el perfil (500, NORMAL) si no existe → el premio lo deja en 510
+        - Suma 10 puntos con tope 1000, recalcula el nivel y persiste
+        """
+        self._verificar_usuario_existe(usuario_id)
+
+        perfil = self._perfil_reputacion_repository.obtener_por_usuario(usuario_id)
+
+        if perfil is None:
+            perfil = PerfilReputacion.crear_para_usuario(usuario_id)
+
+        perfil.premiar_puntualidad()
+
+        self._perfil_reputacion_repository.guardar(perfil)
+
+    def ejecutar_amnistia_mensual(self) -> int:
+        """
+        Ejecuta la amnistía mensual y devuelve cuántos perfiles premió (RF-11, RF-13).
+
+        - Recorre solo los perfiles en nivel BAJO (RF-12: otros niveles no reciben amnistía)
+        - La regla de los 30 días vive en el dominio (`aplicar_amnistia`); 0 premiados
+          es un resultado válido
+        - Persiste cada perfil premiado (con su nivel recalculado)
+        """
+        perfiles_bajos = self._perfil_reputacion_repository.obtener_por_nivel(
+            NivelReputacion.BAJO
+        )
+
+        perfiles_premiados = 0
+        for perfil in perfiles_bajos:
+            if perfil.aplicar_amnistia():
+                self._perfil_reputacion_repository.guardar(perfil)
+                perfiles_premiados += 1
+
+        return perfiles_premiados
+
     def _verificar_usuario_existe(self, usuario_id: UUID) -> None:
         """RF-23: verifica que el usuario esté registrado antes de operar sobre su reputación."""
         if self._usuario_repository.obtener_por_id(usuario_id) is None:
@@ -175,8 +253,11 @@ class ReputacionService:
         """
         Registra una excepción académica para un usuario.
 
-        Crea la excepción, la persiste y retorna su DTO.
+        - RF-23: verifica que el usuario exista antes de operar (sin excepciones huérfanas)
+        - Crea la excepción, la persiste y retorna su DTO.
         """
+        self._verificar_usuario_existe(usuario_id)
+
         excepcion = ExcepcionAcademica(
             usuario_id=usuario_id,
             motivo=motivo,
@@ -185,6 +266,24 @@ class ReputacionService:
             activa=True,
         )
 
+        self._excepcion_academica_repository.guardar(excepcion)
+
+        return ExcepcionAcademicaDTO.from_entity(excepcion)
+
+    def anular_excepcion(self, excepcion_id: UUID) -> ExcepcionAcademicaDTO:
+        """
+        Anula una excepción académica por su identificador (RF-22).
+
+        - Idempotente: anular una excepción ya anulada (o vencida) devuelve su DTO
+        - `ExcepcionNoEncontrada` si el identificador no existe (RF-23, sin HTTP)
+        """
+        excepcion = self._excepcion_academica_repository.obtener_por_id(excepcion_id)
+
+        if excepcion is None:
+            raise ExcepcionNoEncontrada("Excepción no encontrada")
+
+        # D10: la anulación es una operación de negocio del dominio
+        excepcion.anular()
         self._excepcion_academica_repository.guardar(excepcion)
 
         return ExcepcionAcademicaDTO.from_entity(excepcion)
