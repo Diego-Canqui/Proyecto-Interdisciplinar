@@ -71,9 +71,10 @@ class SqlPerfilReputacionRepository(PerfilReputacionRepository):
                 (s for s in modelo.sanciones if s.id == sancion.id), None
             )
             if sancion_modelo is None:
-                # Nueva sanción
+                # Nueva sanción: se enlaza a la colección del agregado (cascade="all"
+                # la añade a la sesión) para que el perfil en memoria quede consistente
                 sancion_modelo = self._sancion_a_modelo(sancion, modelo.id)
-                self._session.add(sancion_modelo)
+                modelo.sanciones.append(sancion_modelo)
             else:
                 # Actualizar sanción existente
                 self._actualizar_sancion_modelo(sancion_modelo, sancion)

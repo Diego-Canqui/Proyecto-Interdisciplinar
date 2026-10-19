@@ -142,6 +142,64 @@ class TestSqlPerfilReputacionRepository:
         assert modelos[0].puntos_descuento == -10
         assert modelos[0].activa is True
 
+    def test_guardar_agrega_sancion_a_perfil_existente_y_la_expone_en_la_misma_sesion(
+        self, perfil_repo, usuario_id, db_session
+    ):
+        """RF-18, RF-20: una sanción nueva en un perfil ya persistido queda en el agregado cacheado.
+
+        `guardar` debe enlazar la sanción nueva a la colección del relationship: si solo
+        hiciera `session.add`, la fila llegaría a BD pero `obtener_por_usuario` seguiría
+        devolviendo el agregado desactualizado dentro de la misma sesión.
+        """
+        # Perfil ya persistido con una sanción
+        perfil = PerfilReputacion.crear_para_usuario(usuario_id)
+        perfil.aplicar_sancion(
+            Sancion(
+                id=uuid4(),
+                tipo=TipoSancion.TARDANZA,
+                puntos_descuento=-10,
+                monto_descuento=Decimal(0),
+                motivo="Tardanza 1",
+                fecha_aplicacion=datetime.now(UTC),
+                fecha_fin=datetime.now(UTC) + timedelta(days=3),
+                activa=True,
+            )
+        )
+        perfil_repo.guardar(perfil)
+
+        # Sanciones nuevas sobre el perfil que YA existe en BD
+        for tipo, motivo in (
+            (TipoSancion.DANO_PARCIAL, "Daño parcial"),
+            (TipoSancion.INASISTENCIA_RESERVA, "No asistió a reserva"),
+        ):
+            perfil = perfil_repo.obtener_por_usuario(usuario_id)
+            perfil.aplicar_sancion(
+                Sancion(
+                    id=uuid4(),
+                    tipo=tipo,
+                    puntos_descuento=tipo.puntos_descuento,
+                    monto_descuento=Decimal(tipo.monto_descuento),
+                    motivo=motivo,
+                    fecha_aplicacion=datetime.now(UTC),
+                    fecha_fin=datetime.now(UTC) + timedelta(days=30),
+                    activa=True,
+                )
+            )
+            perfil_repo.guardar(perfil)
+
+        # Las tres sanciones están en BD...
+        assert db_session.query(SancionModel).count() == 3
+
+        # ...y el agregado leído en la MISMA sesión también las ve
+        obtenido = perfil_repo.obtener_por_usuario(usuario_id)
+        assert obtenido is not None
+        assert len(obtenido.sanciones) == 3
+        assert {s.tipo for s in obtenido.sanciones} == {
+            TipoSancion.TARDANZA,
+            TipoSancion.DANO_PARCIAL,
+            TipoSancion.INASISTENCIA_RESERVA,
+        }
+
     def test_guardar_sincroniza_sanciones_borra_huerfanas(self, perfil_repo, usuario_id, db_session):
         """RF-18, RF-20: Guardar borra sanciones que ya no están en el dominio."""
         # Crear perfil con una sanción

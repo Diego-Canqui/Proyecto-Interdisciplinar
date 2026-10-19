@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 
 from prestamos_recursos.contexts.identidad_reputacion.application.autenticacion_service import (
     AutenticacionService,
@@ -15,6 +17,12 @@ from prestamos_recursos.contexts.identidad_reputacion.application.dto.autenticac
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
     ExcepcionAcademicaDTO,
     PerfilReputacionDTO,
+    SancionDTO,
+)
+from prestamos_recursos.contexts.identidad_reputacion.application.excepciones import (
+    ExcepcionNoEncontrada,
+    SancionInvalida,
+    UsuarioNoEncontrado,
 )
 from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
     ReputacionService,
@@ -71,8 +79,8 @@ def auth_service(usuario_repo):
 
 
 @pytest.fixture
-def reputacion_service(perfil_repo, excepcion_repo):
-    return ReputacionService(perfil_repo, excepcion_repo)
+def reputacion_service(perfil_repo, excepcion_repo, usuario_repo):
+    return ReputacionService(perfil_repo, excepcion_repo, usuario_repo)
 
 
 @pytest.fixture
@@ -138,14 +146,14 @@ class TestEsElegibleParaPrestamo:
     def test_es_elegible_sancion_activa_bloqueante(self, reputacion_service, usuario_creado):
         """Sanción activa sin excepción -> no elegible."""
         # Aplicar sanción TARDANZA
-        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Devolución tardía")
+        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Devolución tardía", dias_retardo=3)
 
         assert reputacion_service.es_elegible_para_prestamo(usuario_creado) is False
 
     def test_es_elegible_excepcion_vigente_cubre_tardanza(self, reputacion_service, excepcion_repo, usuario_creado):
         """Excepción vigente cubre TARDANZA -> elegible."""
         # Aplicar sanción TARDANZA
-        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Devolución tardía")
+        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Devolución tardía", dias_retardo=3)
 
         # Registrar excepción vigente
         ahora = datetime.now(UTC)
@@ -158,7 +166,7 @@ class TestEsElegibleParaPrestamo:
     def test_es_elegible_excepcion_no_vigente_no_cubre(self, reputacion_service, excepcion_repo, usuario_creado):
         """Excepción no vigente (fecha pasada) no cubre TARDANZA -> no elegible."""
         # Aplicar sanción TARDANZA
-        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Devolución tardía")
+        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Devolución tardía", dias_retardo=3)
 
         # Registrar excepción expirada
         ahora = datetime.now(UTC)
@@ -196,8 +204,8 @@ class TestAplicarSancion:
     """Tests para aplicar_sancion."""
 
     def test_aplicar_sancion_tardanza_actualiza_perfil(self, reputacion_service, perfil_repo, usuario_creado):
-        """RF-20: aplicar_sancion crea Sancion con descuentos según TipoSancion, actualiza perfil, persiste."""
-        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Devolución tardía de 3 días")
+        """RF-03/RF-08: aplicar_sancion crea Sancion con descuentos según TipoSancion, actualiza perfil, persiste."""
+        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Devolución tardía de 3 días", dias_retardo=3)
 
         # Verificar perfil actualizado
         perfil = perfil_repo.obtener_por_usuario(usuario_creado)
@@ -209,6 +217,8 @@ class TestAplicarSancion:
         assert sancion.monto_descuento == Decimal(0)
         assert sancion.motivo == "Devolución tardía de 3 días"
         assert sancion.activa is True
+        # RF-05: retraso 3 días → 3 días de bloqueo desde la fecha de aplicación
+        assert sancion.fecha_fin == sancion.fecha_aplicacion + timedelta(days=3)
         # Puntaje: 500 - 10 = 490 (sigue siendo NORMAL)
         assert perfil.puntaje.puntos == 490
         assert perfil.nivel == NivelReputacion.NORMAL
@@ -225,14 +235,19 @@ class TestAplicarSancion:
         assert perfil.puntaje.puntos == 470
 
     def test_aplicar_sancion_dano_total(self, reputacion_service, perfil_repo, usuario_creado):
-        """DANO_TOTAL: -100 pts, monto 0 (se calcula en service según valor recurso)."""
-        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.DANO_TOTAL, "Rompe recurso completamente")
+        """DANO_TOTAL: -100 pts y la deuda es el valor del recurso (monto_opcional, RF-06)."""
+        reputacion_service.aplicar_sancion(
+            usuario_creado,
+            TipoSancion.DANO_TOTAL,
+            "Rompe recurso completamente",
+            monto_opcional=Decimal("200.00"),
+        )
 
         perfil = perfil_repo.obtener_por_usuario(usuario_creado)
         sancion = perfil.sanciones[0]
         assert sancion.tipo == TipoSancion.DANO_TOTAL
         assert sancion.puntos_descuento == -100
-        assert sancion.monto_descuento == Decimal(0)
+        assert sancion.monto_descuento == Decimal("200.00")
         assert perfil.puntaje.puntos == 400
 
     def test_aplicar_sancion_inasistencia_reserva(self, reputacion_service, perfil_repo, usuario_creado):
@@ -248,7 +263,7 @@ class TestAplicarSancion:
 
     def test_aplicar_sancion_multiples_acumula_y_recalcula(self, reputacion_service, perfil_repo, usuario_creado):
         """Múltiples sanciones se acumulan y recalculan nivel."""
-        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Tardanza 1")
+        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Tardanza 1", dias_retardo=3)
         reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.DANO_PARCIAL, "Daño")
         reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.INASISTENCIA_RESERVA, "No asistió")
 
@@ -262,7 +277,7 @@ class TestAplicarSancion:
         """Sanciones suficientes llevan a nivel BAJO."""
         # Aplicar muchas sanciones para bajar a BAJO (< 300)
         for i in range(15):  # 15 * -10 = -150 -> 350, aún NORMAL
-            reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, f"Tardanza {i}")
+            reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, f"Tardanza {i}", dias_retardo=3)
 
         perfil = perfil_repo.obtener_por_usuario(usuario_creado)
         assert perfil.puntaje.puntos == 350  # 500 - 150
@@ -278,6 +293,128 @@ class TestAplicarSancion:
         perfil = perfil_repo.obtener_por_usuario(usuario_creado)
         assert perfil.puntaje.puntos == 290  # 320 - 30
         assert perfil.nivel == NivelReputacion.BAJO
+
+    def test_aplicar_sancion_devuelve_dto_real_persistido(self, reputacion_service, perfil_repo, usuario_creado):
+        """RF-08: retorna el SancionDTO de la sanción creada (id real y persistido)."""
+        sancion_dto = reputacion_service.aplicar_sancion(
+            usuario_creado, TipoSancion.DANO_PARCIAL, "Rayó la pantalla"
+        )
+
+        assert isinstance(sancion_dto, SancionDTO)
+        assert isinstance(sancion_dto.id, UUID)
+
+        # El id del DTO es el de la sanción realmente persistida
+        perfil = perfil_repo.obtener_por_usuario(usuario_creado)
+        assert [s.id for s in perfil.sanciones] == [sancion_dto.id]
+        assert sancion_dto.monto_descuento == Decimal(50)
+        assert sancion_dto.activa is True
+        assert sancion_dto.vigente is True
+
+    @pytest.mark.parametrize(
+        ("tipo", "dias_retardo", "monto_opcional", "dias_bloqueo"),
+        [
+            (TipoSancion.TARDANZA, 1, None, 0),  # gracia: expira al aplicarse (D2)
+            (TipoSancion.TARDANZA, 2, None, 2),
+            (TipoSancion.INASISTENCIA_RESERVA, None, None, 3),
+            (TipoSancion.DANO_PARCIAL, None, None, 30),
+            (TipoSancion.DANO_TOTAL, None, Decimal("200.00"), 60),
+        ],
+    )
+    def test_aplicar_sancion_deriva_fecha_fin_por_tipo(
+        self,
+        reputacion_service,
+        usuario_creado,
+        tipo,
+        dias_retardo,
+        monto_opcional,
+        dias_bloqueo,
+    ):
+        """RF-03/RF-05: fecha_fin = fecha_aplicacion + duracion_bloqueo del tipo, y vigencia derivada."""
+        sancion_dto = reputacion_service.aplicar_sancion(
+            usuario_creado,
+            tipo,
+            "Motivo de prueba",
+            monto_opcional=monto_opcional,
+            dias_retardo=dias_retardo,
+        )
+
+        assert sancion_dto.tipo == tipo
+        assert sancion_dto.fecha_fin == sancion_dto.fecha_aplicacion + timedelta(days=dias_bloqueo)
+        # La gracia (0 días de bloqueo) no está vigente ni en su instante de creación
+        assert sancion_dto.vigente is (dias_bloqueo > 0)
+
+    def test_aplicar_sancion_ignora_monto_y_retraso_en_tipos_fijos(self, reputacion_service, usuario_creado):
+        """RF-06/RF-07: los tipos de deuda y duración fija ignoran monto_opcional y dias_retardo."""
+        sancion_dto = reputacion_service.aplicar_sancion(
+            usuario_creado,
+            TipoSancion.DANO_PARCIAL,
+            "Daño con parámetros ajenos",
+            monto_opcional=Decimal("999.00"),
+            dias_retardo=7,
+        )
+
+        assert sancion_dto.monto_descuento == Decimal(50)  # deuda fija del tipo
+        assert sancion_dto.fecha_fin == sancion_dto.fecha_aplicacion + timedelta(days=30)
+
+    def test_aplicar_sancion_tardanza_sin_dias_retardo_lanza_sancion_invalida(
+        self, reputacion_service, usuario_creado
+    ):
+        """RF-07: TARDANZA exige dias_retardo >= 1 (ausente, 0 o negativo) sin HTTP (D4/D5)."""
+        with pytest.raises(SancionInvalida):
+            reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Tardanza sin retraso")
+
+        with pytest.raises(SancionInvalida):
+            reputacion_service.aplicar_sancion(
+                usuario_creado, TipoSancion.TARDANZA, "Retraso 0", dias_retardo=0
+            )
+
+        with pytest.raises(SancionInvalida):
+            reputacion_service.aplicar_sancion(
+                usuario_creado, TipoSancion.TARDANZA, "Retraso negativo", dias_retardo=-2
+            )
+
+    def test_aplicar_sancion_dano_total_sin_monto_lanza_sancion_invalida(
+        self, reputacion_service, usuario_creado
+    ):
+        """RF-06: DANO_TOTAL exige monto > 0 (deuda $0 falsearía el registro) sin HTTP."""
+        with pytest.raises(SancionInvalida):
+            reputacion_service.aplicar_sancion(
+                usuario_creado, TipoSancion.DANO_TOTAL, "Rompe recurso sin monto"
+            )
+
+        with pytest.raises(SancionInvalida):
+            reputacion_service.aplicar_sancion(
+                usuario_creado, TipoSancion.DANO_TOTAL, "Monto 0", monto_opcional=Decimal(0)
+            )
+
+        with pytest.raises(SancionInvalida):
+            reputacion_service.aplicar_sancion(
+                usuario_creado, TipoSancion.DANO_TOTAL, "Monto negativo", monto_opcional=Decimal(-5)
+            )
+
+    def test_aplicar_sancion_usuario_inexistente_lanza_usuario_no_encontrado(
+        self, reputacion_service, perfil_repo
+    ):
+        """RF-23: un usuario_id no registrado se rechaza sin crear perfiles huérfanos."""
+        usuario_fantasma = uuid4()
+
+        with pytest.raises(UsuarioNoEncontrado):
+            reputacion_service.aplicar_sancion(
+                usuario_fantasma, TipoSancion.DANO_PARCIAL, "Daño de un usuario inexistente"
+            )
+
+        assert perfil_repo.obtener_por_usuario(usuario_fantasma) is None
+
+
+@pytest.mark.integration
+class TestExcepcionesDeAplicacion:
+    """RF-23 (D4): excepciones propias del servicio, sin HTTP, capturables por otros contextos."""
+
+    def test_excepciones_de_aplicacion_no_son_http(self):
+        """Las excepciones de `application/excepciones.py` no dependen de FastAPI."""
+        for excepcion in (ExcepcionNoEncontrada, SancionInvalida, UsuarioNoEncontrado):
+            assert issubclass(excepcion, Exception)
+            assert not issubclass(excepcion, HTTPException)
 
 
 @pytest.mark.integration
@@ -317,5 +454,5 @@ class TestRegistrarExcepcion:
 
         assert excepcion_dto.activa is True
         # Verificamos indirectamente via es_elegible_para_prestamo
-        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Tardanza")
+        reputacion_service.aplicar_sancion(usuario_creado, TipoSancion.TARDANZA, "Tardanza", dias_retardo=3)
         assert reputacion_service.es_elegible_para_prestamo(usuario_creado) is True
