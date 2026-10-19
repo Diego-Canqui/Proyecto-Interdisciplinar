@@ -25,7 +25,8 @@ export default function UsuariosPage() {
     e.preventDefault();
     setError("");
     try {
-      await crearUsuario({ nombre, correo, telefono, password, roles: [] });
+      // Sin `roles`: el default [ESTUDIANTE] lo aplica el backend (RF-16)
+      await crearUsuario({ nombre, correo, telefono, password });
     } catch (err) {
       setError(MENSAJES_ERROR[err.status] || err.message || "Error al crear el usuario");
       return;
