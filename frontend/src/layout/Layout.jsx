@@ -1,5 +1,5 @@
 import { NavLink, Link, Outlet, useNavigate } from "react-router-dom";
-import { logout } from "../../features/identidad/api.js";
+import { logout } from "../features/identidad/api.js";
 
 // Mapa rol → enlace = tabla de la guía §6 (D1). «Usuarios» solo para administración.
 const ENLACES = [
