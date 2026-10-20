@@ -6,17 +6,17 @@ from sqlalchemy.orm import Session
 
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
+from prestamos_recursos.contexts.prestamos.infrastructure.models.prestamo_model import PrestamoModel
 from prestamos_recursos.contexts.prestamos.infrastructure.repositories.sql_prestamo_repository import (
     SqlPrestamoRepository,
 )
-from prestamos_recursos.shared.database import Base
 
 
 def make_session() -> Session:
     engine = create_engine("sqlite:///:memory:")
     with engine.connect() as connection:
         connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS prestamos")
-        Base.metadata.create_all(connection)
+        PrestamoModel.__table__.create(connection)
     return Session(engine, expire_on_commit=False)
 
 

@@ -1,31 +1,51 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
-from prestamos_recursos.contexts.prestamos.infrastructure.repositories.sql_prestamo_repository import (
-    SqlPrestamoRepository,
-)
+from prestamos_recursos.contexts.prestamos.presentation.dependencies import get_prestamo_service
 from prestamos_recursos.main import app
 
 client = TestClient(app)
 
 
+class FakePrestamoRepository:
+    def __init__(self, prestamos: list[Prestamo] | None = None) -> None:
+        self.prestamos = prestamos or []
+
+    def obtener_por_usuario(self, id_usuario):
+        return [p for p in self.prestamos if p.usuario_id == id_usuario]
+
+
+@pytest.fixture(autouse=True)
+def cleanup_overrides():
+    yield
+    app.dependency_overrides.clear()
+
+
 @pytest.mark.e2e
-def test_consultar_historial_usuario_sin_prestamos(db_session):
+def test_consultar_historial_usuario_sin_prestamos():
     usuario_id = uuid4()
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
     response = client.get(f"/prestamos/usuarios/{usuario_id}/historial")
     assert response.status_code == 200
     assert response.json() == []
 
 
 @pytest.mark.e2e
-def test_consultar_historial_con_prestamos(db_session):
+def test_consultar_historial_con_prestamos():
     usuario_id = uuid4()
-    repo = SqlPrestamoRepository(db_session)
     prestamo = Prestamo(
         reserva_id=uuid4(),
         recurso_id=uuid4(),
@@ -34,8 +54,12 @@ def test_consultar_historial_con_prestamos(db_session):
         fecha_fin=datetime(2026, 10, 25, tzinfo=UTC),
         estado=EstadoPrestamo.ACTIVO,
     )
-    repo.guardar(prestamo)
-    db_session.commit()
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
 
     response = client.get(f"/prestamos/usuarios/{usuario_id}/historial")
     assert response.status_code == 200

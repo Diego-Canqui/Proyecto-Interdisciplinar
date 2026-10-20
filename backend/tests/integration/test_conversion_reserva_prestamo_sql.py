@@ -24,7 +24,8 @@ def make_session() -> Session:
     with engine.connect() as connection:
         connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS reservas")
         connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS prestamos")
-        Base.metadata.create_all(connection)
+        ReservaModel.__table__.create(connection)
+        PrestamoModel.__table__.create(connection)
     return Session(engine, expire_on_commit=False)
 
 
