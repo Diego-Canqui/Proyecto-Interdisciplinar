@@ -1,0 +1,57 @@
+from logging.config import fileConfig
+
+from sqlalchemy import engine_from_config
+from sqlalchemy import pool
+
+from alembic import context
+
+# Importar Base y todos los modelos para que target_metadata los detecte
+from prestamos_recursos.shared.database import Base
+from prestamos_recursos.contexts.catalogo.infrastructure.models.recurso_model import RecursoModel
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.usuario_model import UsuarioModel
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.perfil_reputacion_model import PerfilReputacionModel
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.sancion_model import SancionModel
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.excepcion_academica_model import ExcepcionAcademicaModel
+from prestamos_recursos.contexts.reservas.infrastructure.models.reserva_model import ReservaModel
+from prestamos_recursos.contexts.prestamos.infrastructure.models.prestamo_model import PrestamoModel
+from prestamos_recursos.contexts.prestamos.infrastructure.models.checklist_model import ChecklistModel
+from prestamos_recursos.contexts.prestamos.infrastructure.models.garantia_model import GarantiaModel
+
+config = context.config
+
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+target_metadata = Base.metadata
+
+def run_migrations_offline() -> None:
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"server_side_cursors": True},
+    )
+
+    with context.begin_transaction():
+        context.run_migrations(transaction_per_migration=True)
+
+def run_migrations_online() -> None:
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
