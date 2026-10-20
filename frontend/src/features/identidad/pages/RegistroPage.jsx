@@ -119,7 +119,7 @@ export default function RegistroPage() {
         roles: ["ESTUDIANTE"],
       });
       localStorage.setItem("token", response.token);
-      navigate("/");
+      navigate("/recursos");
     } catch (err) {
       setErrorGeneral(err.message || "Error al registrar usuario");
     }

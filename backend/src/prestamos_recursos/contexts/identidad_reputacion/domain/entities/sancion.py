@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -18,6 +18,7 @@ class Sancion:
     monto_descuento: Decimal
     motivo: str
     fecha_aplicacion: datetime = field(default_factory=datetime.now)
+    fecha_fin: datetime
     activa: bool = False
 
     def aplicar(self) -> None:
@@ -28,6 +29,27 @@ class Sancion:
         """Retorna los puntos de descuento de la sanción."""
         return self.puntos_descuento
 
-    def generar_cobro(self) -> bool:
-        """Retorna True si la sanción genera un cobro (monto_descuento > 0)."""
-        return self.monto_descuento > 0
+    def esta_vigente(self, ahora: datetime | None = None) -> bool:
+        """
+        Retorna True si la sanción está vigente (bloquea la elegibilidad):
+        - activa == True
+        - fecha_fin > ahora (ESTRICTA: en su fecha de fin ya expiró)
+
+        Normaliza fechas naive a UTC para la comparación, como hace
+        ExcepcionAcademica.es_vigente.
+        """
+        if not self.activa:
+            return False
+
+        if ahora is None:
+            ahora = datetime.now(UTC)
+        elif ahora.tzinfo is None:
+            # Normalizar ahora naive a UTC para comparación (manejar naive y aware)
+            ahora = ahora.replace(tzinfo=UTC)
+
+        # Normalizar fecha_fin a UTC para comparación (manejar naive y aware)
+        fin = self.fecha_fin
+        if fin.tzinfo is None:
+            fin = fin.replace(tzinfo=UTC)
+
+        return fin > ahora

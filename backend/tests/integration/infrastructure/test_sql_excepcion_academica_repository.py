@@ -12,6 +12,9 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.excepcion_academica_model import (
     ExcepcionAcademicaModel,
 )
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.usuario_model import (
+    UsuarioModel,
+)
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
     SqlExcepcionAcademicaRepository,
 )
@@ -37,8 +40,27 @@ def excepcion_repo(db_session):
 
 
 @pytest.fixture
-def usuario_id() -> UUID:
-    return uuid4()
+def usuario_factory(db_session):
+    """Crea usuarios reales en BD (la FK excepciones_academicas.usuario_id lo exige)."""
+
+    def _crear() -> UUID:
+        usuario = UsuarioModel(
+            id=uuid4(),
+            nombre="Usuario Test",
+            correo=f"usuario-{uuid4().hex}@test.com",
+            password_hash="hash-ficticio-de-prueba",  # ficticio: nunca se verifica
+            roles=["ESTUDIANTE"],
+        )
+        db_session.add(usuario)
+        db_session.flush()
+        return usuario.id
+
+    return _crear
+
+
+@pytest.fixture
+def usuario_id(usuario_factory) -> UUID:
+    return usuario_factory()
 
 
 @pytest.mark.integration
@@ -129,9 +151,10 @@ class TestSqlExcepcionAcademicaRepository:
         obtenida = excepcion_repo.obtener_por_id(uuid4())
         assert obtenida is None
 
-    def test_obtener_vigentes_por_usuario_filtra_activa_y_fechas(self, excepcion_repo, usuario_id, db_session):
+    def test_obtener_vigentes_por_usuario_filtra_activa_y_fechas(self, excepcion_repo, usuario_id, usuario_factory, db_session):
         """RF-19, RF-21: Obtener vigentes filtra por activa=True y rango de fechas."""
         ahora = datetime.now(UTC)
+        otro_usuario_id = usuario_factory()
         
         # Excepción 1: vigente (activa, fechas correctas)
         excepcion_vigente = ExcepcionAcademica(
@@ -176,7 +199,7 @@ class TestSqlExcepcionAcademicaRepository:
         # Excepción 5: de otro usuario (no debe aparecer)
         excepcion_otro_usuario = ExcepcionAcademica(
             id=uuid4(),
-            usuario_id=uuid4(),  # Otro usuario
+            usuario_id=otro_usuario_id,  # Otro usuario
             motivo="Otro usuario",
             fecha_inicio=ahora - timedelta(days=5),
             fecha_fin=ahora + timedelta(days=5),

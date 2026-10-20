@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { obtenerPerfilReputacion } from "../api.js";
+import { obtenerElegibilidad, obtenerPerfilReputacion } from "../api.js";
 
 export default function ReputacionPage() {
   const navigate = useNavigate();
   const [perfil, setPerfil] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
+  const [elegibilidad, setElegibilidad] = useState(null);
+  const [cargandoElegibilidad, setCargandoElegibilidad] = useState(false);
+  const [errorElegibilidad, setErrorElegibilidad] = useState("");
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -49,7 +52,7 @@ export default function ReputacionPage() {
           {error}
         </div>
         <button
-          onClick={() => navigate("/")}
+          onClick={() => navigate("/recursos")}
           style={{
             marginTop: "1rem",
             padding: "0.5rem 1rem",
@@ -74,7 +77,7 @@ export default function ReputacionPage() {
     );
   }
 
-  const sancionesActivas = perfil.sanciones?.filter((s) => s.activa) || [];
+  const sanciones = perfil.sanciones || [];
 
   const getNivelColor = (nivel) => {
     switch (nivel) {
@@ -88,6 +91,21 @@ export default function ReputacionPage() {
         return "#dc3545";
       default:
         return "#6c757d";
+    }
+  };
+
+  // RF-21: la elegibilidad la calcula el backend; la interfaz solo la muestra
+  const consultarElegibilidad = async () => {
+    setCargandoElegibilidad(true);
+    setErrorElegibilidad("");
+    try {
+      const data = await obtenerElegibilidad();
+      setElegibilidad(data);
+    } catch (err) {
+      setElegibilidad(null);
+      setErrorElegibilidad(err.message || "No se pudo consultar la elegibilidad");
+    } finally {
+      setCargandoElegibilidad(false);
     }
   };
 
@@ -129,12 +147,12 @@ export default function ReputacionPage() {
       </div>
 
       <section style={{ marginBottom: "1.5rem" }}>
-        <h2>Sanciones activas</h2>
-        {sancionesActivas.length === 0 ? (
-          <p style={{ color: "#28a745" }}>No tienes sanciones activas. ✓</p>
+        <h2>Historial de sanciones</h2>
+        {sanciones.length === 0 ? (
+          <p style={{ color: "#28a745" }}>No tienes sanciones registradas. ✓</p>
         ) : (
           <ul style={{ listStyle: "none", padding: 0 }}>
-            {sancionesActivas.map((sancion) => (
+            {sanciones.map((sancion) => (
               <li
                 key={sancion.id}
                 style={{
@@ -146,7 +164,22 @@ export default function ReputacionPage() {
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-                  <strong style={{ textTransform: "capitalize" }}>{sancion.tipo.toLowerCase()}</strong>
+                  <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <strong style={{ textTransform: "capitalize" }}>{sancion.tipo.toLowerCase()}</strong>
+                    <span
+                      style={{
+                        padding: "0.15rem 0.5rem",
+                        borderRadius: "4px",
+                        color: "white",
+                        backgroundColor: sancion.vigente ? "#dc3545" : "#6c757d",
+                        fontSize: "0.75rem",
+                        fontWeight: "bold",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {sancion.vigente ? "Vigente" : "Expirada"}
+                    </span>
+                  </span>
                   <span style={{ color: "#dc3545", fontWeight: "bold" }}>
                     {sancion.puntos_descuento > 0 ? `-${sancion.puntos_descuento} pts` : `${sancion.puntos_descuento} pts`}
                   </span>
@@ -157,9 +190,12 @@ export default function ReputacionPage() {
                 <div style={{ color: "#6c757d", fontSize: "0.75rem" }}>
                   Aplicada: {new Date(sancion.fecha_aplicacion).toLocaleString()}
                 </div>
-                {sancion.monto_descuento > 0 && (
+                <div style={{ color: "#6c757d", fontSize: "0.75rem" }}>
+                  Fin: {new Date(sancion.fecha_fin).toLocaleString()}
+                </div>
+                {Number(sancion.monto_descuento) > 0 && (
                   <div style={{ color: "#dc3545", fontSize: "0.875rem", marginTop: "0.25rem" }}>
-                    Monto a pagar: ${sancion.monto_descuento.toFixed(2)}
+                    Monto a pagar: ${Number(sancion.monto_descuento).toFixed(2)}
                   </div>
                 )}
               </li>
@@ -171,16 +207,8 @@ export default function ReputacionPage() {
       <section>
         <h2>Elegibilidad para préstamo</h2>
         <button
-          onClick={() => {
-            const elegible = perfil.nivel !== "BAJO" && sancionesActivas.length === 0;
-            alert(
-              elegible
-                ? "✅ Eres ELEGIBLE para realizar préstamos."
-                : `❌ NO eres elegible para préstamos.\n\nRazones:${
-                    perfil.nivel === "BAJO" ? "\n- Nivel de reputación: BAJO" : ""
-                  }${sancionesActivas.length > 0 ? "\n- Tienes sanciones activas" : ""}`
-            );
-          }}
+          onClick={consultarElegibilidad}
+          disabled={cargandoElegibilidad}
           style={{
             padding: "0.75rem 1.5rem",
             backgroundColor: "#007bff",
@@ -191,8 +219,27 @@ export default function ReputacionPage() {
             fontSize: "1rem",
           }}
         >
-          Ver elegibilidad
+          {cargandoElegibilidad ? "Consultando..." : "Ver elegibilidad"}
         </button>
+        {elegibilidad && (
+          <p
+            role="status"
+            style={{
+              marginTop: "1rem",
+              color: elegibilidad.elegible ? "#28a745" : "#dc3545",
+              fontWeight: "bold",
+            }}
+          >
+            {elegibilidad.elegible
+              ? "✅ Eres elegible para realizar préstamos."
+              : `❌ No eres elegible para préstamos.${elegibilidad.razon ? ` ${elegibilidad.razon}` : ""}`}
+          </p>
+        )}
+        {errorElegibilidad && (
+          <p role="alert" style={{ marginTop: "1rem", color: "red" }}>
+            {errorElegibilidad}
+          </p>
+        )}
       </section>
     </main>
   );

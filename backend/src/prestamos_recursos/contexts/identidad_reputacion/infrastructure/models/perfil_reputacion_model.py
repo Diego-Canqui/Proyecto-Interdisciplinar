@@ -72,6 +72,8 @@ class SancionModel(Base):
     fecha_aplicacion: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
+    # RF-03, RF-20 (D1): toda sanción expira → fecha_fin SIEMPRE presente (NOT NULL)
+    fecha_fin: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     activa: Mapped[bool] = mapped_column(default=True, nullable=False)
 
     # Relación N:1 hacia PerfilReputacionModel

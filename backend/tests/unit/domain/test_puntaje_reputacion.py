@@ -104,5 +104,42 @@ class TestPuntajeReputacion:
         assert PuntajeReputacion(puntos=1000).es_valido() is True
 
 
+@pytest.mark.unit
+class TestPuntajeReputacionSumarConTope:
+    """Tests para sumar_con_tope: suma con clamp a 1000 (RF-10, espejo del clamp a 0 de restar)."""
+
+    def test_sumar_con_tope_suma_normal(self):
+        """sumar_con_tope() debe sumar sin tocar el tope cuando no lo supera."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        original = PuntajeReputacion(puntos=500)
+        resultado = original.sumar_con_tope(30)
+
+        assert resultado.puntos == 530
+        # Inmutabilidad: nueva instancia y original intacto
+        assert resultado is not original
+        assert original.puntos == 500
+
+    def test_sumar_con_tope_clampa_a_1000(self):
+        """sumar_con_tope() debe quedar en 1000 cuando la suma lo supera (premio 995+10 → 1000)."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        assert PuntajeReputacion(puntos=995).sumar_con_tope(10).puntos == 1000
+        assert PuntajeReputacion(puntos=990).sumar_con_tope(25).puntos == 1000
+        assert PuntajeReputacion(puntos=1000).sumar_con_tope(10).puntos == 1000
+
+    def test_sumar_con_tope_no_lanza_value_error(self):
+        """sumar_con_tope() no debe lanzar ValueError por superar 1000 (a diferencia de sumar)."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import PuntajeReputacion
+
+        original = PuntajeReputacion(puntos=950)
+
+        assert original.sumar_con_tope(100).puntos == 1000
+
+        # El tope es un caso normal de negocio, no un error
+        with pytest.raises(ValueError):
+            original.sumar(100)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -70,10 +70,27 @@ export async function obtenerPerfilReputacion() {
  * @param {string} usuario_id - UUID del usuario a sancionar
  * @param {string} tipo - Tipo de sanción: TARDANZA, DANO_PARCIAL, DANO_TOTAL, INASISTENCIA_RESERVA
  * @param {string} motivo - Motivo de la sanción
- * @returns {Promise<void>}
+ * @param {number|null} monto_opcional - Solo DANO_TOTAL: valor del recurso (RF-06)
+ * @param {number|null} dias_retardo - Solo TARDANZA: días de retraso >= 1 (RF-07)
+ * @returns {Promise<object>} SancionDTO creada, con fecha_fin y vigente
  */
-export async function aplicarSancion(usuario_id, tipo, motivo) {
-  await apiClient.post("/reputacion/sanciones", { usuario_id, tipo, motivo });
+export async function aplicarSancion(
+  usuario_id,
+  tipo,
+  motivo,
+  monto_opcional = null,
+  dias_retardo = null
+) {
+  const datos = { usuario_id, tipo, motivo };
+  // Cada tipo solo admite sus parámetros propios: se omiten los que no aplican
+  if (monto_opcional !== null) {
+    datos.monto_opcional = monto_opcional;
+  }
+  if (dias_retardo !== null) {
+    datos.dias_retardo = dias_retardo;
+  }
+  const response = await apiClient.post("/reputacion/sanciones", datos);
+  return response;
 }
 
 /**
@@ -91,5 +108,33 @@ export async function registrarExcepcion(usuario_id, motivo, fecha_inicio, fecha
     fecha_inicio,
     fecha_fin,
   });
+  return response;
+}
+
+/**
+ * Consulta la elegibilidad del usuario autenticado (RF-21).
+ * @returns {Promise<{ elegible: boolean, razon: string|null }>} ElegibilidadDTO evaluada en el backend
+ */
+export async function obtenerElegibilidad() {
+  const response = await apiClient.get("/reputacion/elegibilidad");
+  return response;
+}
+
+/**
+ * Ejecuta la amnistía mensual (requiere rol ADMINISTRADOR_SISTEMA o GESTOR_ALMACEN).
+ * @returns {Promise<{ perfiles_premiados: number }>} ResultadoAmnistiaDTO con el conteo
+ */
+export async function ejecutarAmnistia() {
+  const response = await apiClient.post("/reputacion/amnistia");
+  return response;
+}
+
+/**
+ * Anula una excepción académica (idempotente; requiere rol ADMINISTRADOR_SISTEMA o GESTOR_ALMACEN).
+ * @param {string} excepcionId - UUID de la excepción a anular
+ * @returns {Promise<object>} ExcepcionAcademicaDTO anulada
+ */
+export async function anularExcepcion(excepcionId) {
+  const response = await apiClient.post(`/reputacion/excepciones/${excepcionId}/anular`);
   return response;
 }

@@ -1,11 +1,11 @@
 """Tests de integración para AutenticacionService (application + DB)."""
 from __future__ import annotations
 
-import time
 from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from prestamos_recursos.contexts.identidad_reputacion.application.autenticacion_service import (
     AutenticacionService,
@@ -18,7 +18,7 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario i
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_usuario_repository import (
     SqlUsuarioRepository,
 )
-from prestamos_recursos.shared.database import Base, engine, SessionLocal
+from prestamos_recursos.shared.database import Base, SessionLocal, engine
 
 
 @pytest.fixture(scope="function")
@@ -104,45 +104,53 @@ class TestRegistrarUsuario:
 
     def test_registrar_usuario_password_corta_400(self, auth_service):
         """RF-04: Registro con password < 8 chars o sin complejidad lanza 400."""
-        # Password muy corta
-        with pytest.raises(Exception) as exc_info:
+        # Password muy corta: rechazo por longitud mínima (D12: loc del campo, no texto de pydantic)
+        with pytest.raises(ValidationError) as exc_info:
             CrearUsuarioDTO(
                 nombre="Juan Pérez",
                 correo="juan@example.com",
                 telefono="+34 600 123 456",
                 password="Pass1",
             )
-        assert "string should have at least 8 characters" in str(exc_info.value).lower()
+        errores = exc_info.value.errors()
+        assert [e["loc"] for e in errores] == [("password",)]
+        assert errores[0]["type"] == "string_too_short"
 
         # Password sin mayúscula
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ValidationError) as exc_info:
             CrearUsuarioDTO(
                 nombre="Juan Pérez",
                 correo="juan@example.com",
                 telefono="+34 600 123 456",
                 password="password123",
             )
-        assert "string does not match pattern" in str(exc_info.value).lower()
+        errores = exc_info.value.errors()
+        assert [e["loc"] for e in errores] == [("password",)]
+        assert "mayúscula" in errores[0]["msg"]  # regla propia de validar_password_complejidad
 
         # Password sin minúscula
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ValidationError) as exc_info:
             CrearUsuarioDTO(
                 nombre="Juan Pérez",
                 correo="juan@example.com",
                 telefono="+34 600 123 456",
                 password="PASSWORD123",
             )
-        assert "string does not match pattern" in str(exc_info.value).lower()
+        errores = exc_info.value.errors()
+        assert [e["loc"] for e in errores] == [("password",)]
+        assert "minúscula" in errores[0]["msg"]  # regla propia de validar_password_complejidad
 
         # Password sin dígito
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ValidationError) as exc_info:
             CrearUsuarioDTO(
                 nombre="Juan Pérez",
                 correo="juan@example.com",
                 telefono="+34 600 123 456",
                 password="Password",
             )
-        assert "string does not match pattern" in str(exc_info.value).lower()
+        errores = exc_info.value.errors()
+        assert [e["loc"] for e in errores] == [("password",)]
+        assert "dígito" in errores[0]["msg"]  # regla propia de validar_password_complejidad
 
     def test_registrar_usuario_campos_faltantes_400(self, auth_service):
         """RF-05: Registro con campos obligatorios faltantes lanza 400."""
@@ -175,14 +183,17 @@ class TestRegistrarUsuario:
 
     def test_registrar_usuario_telefono_invalido_400(self, auth_service):
         """RF-06: Registro con teléfono inválido lanza 400."""
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(ValidationError) as exc_info:
             CrearUsuarioDTO(
                 nombre="Juan Pérez",
                 correo="juan@example.com",
                 telefono="123",  # Inválido: muy corto, no coincide regex
                 password="Password123",
             )
-        assert "string does not match pattern" in str(exc_info.value).lower()
+        # D12: se fija el campo (loc) y el tipo de error, no la redacción de pydantic
+        errores = exc_info.value.errors()
+        assert [e["loc"] for e in errores] == [("telefono",)]
+        assert errores[0]["type"] == "string_pattern_mismatch"
 
     def test_registrar_usuario_con_roles_personalizados(self, auth_service):
         """Registro con roles personalizados los respeta."""
@@ -279,7 +290,6 @@ class TestValidarToken:
 
         # Token con firma incorrecta (simular otro secret)
         from jose import jwt
-        from prestamos_recursos.config import settings
 
         payload_falso = {"sub": str(resultado.usuario.id), "roles": ["ESTUDIANTE"]}
         token_falso = jwt.encode(payload_falso, "otro-secret", algorithm="HS256")
@@ -321,16 +331,18 @@ class TestObtenerUsuarioPorToken:
         self, auth_service
     ):
         """Token válido pero usuario borrado devuelve None."""
+        from datetime import UTC, datetime, timedelta
+
         from jose import jwt
-        from datetime import datetime, timedelta
+
         from prestamos_recursos.config import settings
 
         # Token con sub de UUID inexistente
         payload = {
             "sub": "00000000-0000-0000-0000-000000000000",
             "roles": ["ESTUDIANTE"],
-            "exp": datetime.utcnow() + timedelta(hours=1),
-            "iat": datetime.utcnow(),
+            "exp": datetime.now(UTC) + timedelta(hours=1),
+            "iat": datetime.now(UTC),
         }
         token = jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 

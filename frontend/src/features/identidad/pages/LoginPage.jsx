@@ -15,7 +15,7 @@ export default function LoginPage() {
     try {
       const response = await login({ correo, password });
       localStorage.setItem("token", response.token);
-      navigate("/");
+      navigate("/recursos");
     } catch (err) {
       setError(err.message || "Correo o contraseña incorrectos");
     }

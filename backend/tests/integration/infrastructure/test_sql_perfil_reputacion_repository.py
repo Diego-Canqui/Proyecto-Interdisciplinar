@@ -1,7 +1,7 @@
 """Tests de integración para SqlPerfilReputacionRepository (infrastructure + DB)."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -21,6 +21,9 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.punta
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.perfil_reputacion_model import (
     PerfilReputacionModel,
     SancionModel,
+)
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.usuario_model import (
+    UsuarioModel,
 )
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_perfil_reputacion_repository import (
     SqlPerfilReputacionRepository,
@@ -47,15 +50,34 @@ def perfil_repo(db_session):
 
 
 @pytest.fixture
-def usuario_id() -> UUID:
-    return uuid4()
+def usuario_factory(db_session):
+    """Crea usuarios reales en BD (la FK perfiles_reputacion.usuario_id lo exige)."""
+
+    def _crear() -> UUID:
+        usuario = UsuarioModel(
+            id=uuid4(),
+            nombre="Usuario Test",
+            correo=f"usuario-{uuid4().hex}@test.com",
+            password_hash="hash-ficticio-de-prueba",  # ficticio: nunca se verifica
+            roles=["ESTUDIANTE"],
+        )
+        db_session.add(usuario)
+        db_session.flush()
+        return usuario.id
+
+    return _crear
+
+
+@pytest.fixture
+def usuario_id(usuario_factory) -> UUID:
+    return usuario_factory()
 
 
 @pytest.mark.integration
 class TestSqlPerfilReputacionRepository:
     """Tests para SqlPerfilReputacionRepository."""
 
-    def test_guardar_crea_perfil_nuevo(self, perfil_repo, usuario_id):
+    def test_guardar_crea_perfil_nuevo(self, perfil_repo, usuario_id, db_session):
         """RF-18: Guardar crea un perfil nuevo con sanciones vacías."""
         ahora = datetime.now(UTC)
         perfil = PerfilReputacion(
@@ -106,6 +128,7 @@ class TestSqlPerfilReputacionRepository:
             monto_descuento=Decimal(0),
             motivo="Llegada tarde",
             fecha_aplicacion=datetime.now(UTC),
+            fecha_fin=datetime.now(UTC) + timedelta(days=1),
             activa=True,
         )
         perfil.aplicar_sancion(sancion)
@@ -119,6 +142,64 @@ class TestSqlPerfilReputacionRepository:
         assert modelos[0].puntos_descuento == -10
         assert modelos[0].activa is True
 
+    def test_guardar_agrega_sancion_a_perfil_existente_y_la_expone_en_la_misma_sesion(
+        self, perfil_repo, usuario_id, db_session
+    ):
+        """RF-18, RF-20: una sanción nueva en un perfil ya persistido queda en el agregado cacheado.
+
+        `guardar` debe enlazar la sanción nueva a la colección del relationship: si solo
+        hiciera `session.add`, la fila llegaría a BD pero `obtener_por_usuario` seguiría
+        devolviendo el agregado desactualizado dentro de la misma sesión.
+        """
+        # Perfil ya persistido con una sanción
+        perfil = PerfilReputacion.crear_para_usuario(usuario_id)
+        perfil.aplicar_sancion(
+            Sancion(
+                id=uuid4(),
+                tipo=TipoSancion.TARDANZA,
+                puntos_descuento=-10,
+                monto_descuento=Decimal(0),
+                motivo="Tardanza 1",
+                fecha_aplicacion=datetime.now(UTC),
+                fecha_fin=datetime.now(UTC) + timedelta(days=3),
+                activa=True,
+            )
+        )
+        perfil_repo.guardar(perfil)
+
+        # Sanciones nuevas sobre el perfil que YA existe en BD
+        for tipo, motivo in (
+            (TipoSancion.DANO_PARCIAL, "Daño parcial"),
+            (TipoSancion.INASISTENCIA_RESERVA, "No asistió a reserva"),
+        ):
+            perfil = perfil_repo.obtener_por_usuario(usuario_id)
+            perfil.aplicar_sancion(
+                Sancion(
+                    id=uuid4(),
+                    tipo=tipo,
+                    puntos_descuento=tipo.puntos_descuento,
+                    monto_descuento=Decimal(tipo.monto_descuento),
+                    motivo=motivo,
+                    fecha_aplicacion=datetime.now(UTC),
+                    fecha_fin=datetime.now(UTC) + timedelta(days=30),
+                    activa=True,
+                )
+            )
+            perfil_repo.guardar(perfil)
+
+        # Las tres sanciones están en BD...
+        assert db_session.query(SancionModel).count() == 3
+
+        # ...y el agregado leído en la MISMA sesión también las ve
+        obtenido = perfil_repo.obtener_por_usuario(usuario_id)
+        assert obtenido is not None
+        assert len(obtenido.sanciones) == 3
+        assert {s.tipo for s in obtenido.sanciones} == {
+            TipoSancion.TARDANZA,
+            TipoSancion.DANO_PARCIAL,
+            TipoSancion.INASISTENCIA_RESERVA,
+        }
+
     def test_guardar_sincroniza_sanciones_borra_huerfanas(self, perfil_repo, usuario_id, db_session):
         """RF-18, RF-20: Guardar borra sanciones que ya no están en el dominio."""
         # Crear perfil con una sanción
@@ -130,6 +211,7 @@ class TestSqlPerfilReputacionRepository:
             monto_descuento=Decimal(0),
             motivo="Sanción 1",
             fecha_aplicacion=datetime.now(UTC),
+            fecha_fin=datetime.now(UTC) + timedelta(days=3),
             activa=True,
         )
         perfil.aplicar_sancion(sancion1)
@@ -155,6 +237,7 @@ class TestSqlPerfilReputacionRepository:
             monto_descuento=Decimal(0),
             motivo="Original",
             fecha_aplicacion=datetime.now(UTC),
+            fecha_fin=datetime.now(UTC) + timedelta(days=30),
             activa=True,
         )
         perfil.aplicar_sancion(sancion)
@@ -183,6 +266,7 @@ class TestSqlPerfilReputacionRepository:
                 monto_descuento=Decimal(0),
                 motivo=f"Sanción {i}",
                 fecha_aplicacion=datetime.now(UTC),
+                fecha_fin=datetime.now(UTC) + timedelta(days=3),
                 activa=True,
             )
             perfil.aplicar_sancion(sancion)
@@ -204,6 +288,7 @@ class TestSqlPerfilReputacionRepository:
             monto_descuento=Decimal("50.00"),
             motivo="Daño libro",
             fecha_aplicacion=datetime.now(UTC),
+            fecha_fin=datetime.now(UTC) + timedelta(days=30),
             activa=True,
         )
         perfil.aplicar_sancion(sancion)
@@ -235,6 +320,7 @@ class TestSqlPerfilReputacionRepository:
             monto_descuento=Decimal(0),
             motivo="No retiró reserva",
             fecha_aplicacion=datetime.now(UTC),
+            fecha_fin=datetime.now(UTC) + timedelta(days=3),
             activa=True,
         )
         perfil.aplicar_sancion(sancion)
@@ -258,9 +344,9 @@ class TestSqlPerfilReputacionRepository:
         perfil = PerfilReputacion.crear_para_usuario(usuario_id)
         
         sanciones = [
-            Sancion(id=uuid4(), tipo=TipoSancion.TARDANZA, puntos_descuento=-10, monto_descuento=Decimal(0), motivo="Tardanza 1", fecha_aplicacion=datetime.now(UTC), activa=True),
-            Sancion(id=uuid4(), tipo=TipoSancion.DANO_TOTAL, puntos_descuento=-100, monto_descuento=Decimal("200.00"), motivo="Pérdida libro", fecha_aplicacion=datetime.now(UTC), activa=True),
-            Sancion(id=uuid4(), tipo=TipoSancion.INASISTENCIA_RESERVA, puntos_descuento=-15, monto_descuento=Decimal(0), motivo="No show", fecha_aplicacion=datetime.now(UTC), activa=False),
+            Sancion(id=uuid4(), tipo=TipoSancion.TARDANZA, puntos_descuento=-10, monto_descuento=Decimal(0), motivo="Tardanza 1", fecha_aplicacion=datetime.now(UTC), fecha_fin=datetime.now(UTC) + timedelta(days=1), activa=True),
+            Sancion(id=uuid4(), tipo=TipoSancion.DANO_TOTAL, puntos_descuento=-100, monto_descuento=Decimal("200.00"), motivo="Pérdida libro", fecha_aplicacion=datetime.now(UTC), fecha_fin=datetime.now(UTC) + timedelta(days=60), activa=True),
+            Sancion(id=uuid4(), tipo=TipoSancion.INASISTENCIA_RESERVA, puntos_descuento=-15, monto_descuento=Decimal(0), motivo="No show", fecha_aplicacion=datetime.now(UTC), fecha_fin=datetime.now(UTC) + timedelta(days=3), activa=False),
         ]
         for s in sanciones:
             perfil.aplicar_sancion(s)
@@ -275,4 +361,73 @@ class TestSqlPerfilReputacionRepository:
         # Verificar montos
         dano_total = next(m for m in modelos if m.tipo == TipoSancion.DANO_TOTAL)
         assert dano_total.monto_descuento == Decimal("200.00")
-        assert dano_total.generar_cobro() is True  # método del modelo no existe, verificar entidad
+        # RF-03, RF-20: toda sanción persiste con fecha_fin (ya no hay generar_cobro)
+        assert all(m.fecha_fin is not None for m in modelos)
+
+    def test_fecha_fin_persiste_y_se_recarga(self, perfil_repo, usuario_id, db_session):
+        """RF-03, RF-20: fecha_fin se persiste y se reconstruye al recargar la entidad."""
+        ahora = datetime.now(UTC)
+        fin_vigente = ahora + timedelta(days=30)
+        fin_expirada = ahora - timedelta(days=1)
+
+        perfil = PerfilReputacion.crear_para_usuario(usuario_id)
+        sancion_vigente = Sancion(
+            id=uuid4(),
+            tipo=TipoSancion.DANO_PARCIAL,
+            puntos_descuento=-30,
+            monto_descuento=Decimal("50.00"),
+            motivo="Daño con vigencia",
+            fecha_aplicacion=ahora,
+            fecha_fin=fin_vigente,
+            activa=True,
+        )
+        sancion_expirada = Sancion(
+            id=uuid4(),
+            tipo=TipoSancion.TARDANZA,
+            puntos_descuento=-10,
+            monto_descuento=Decimal(0),
+            motivo="Tardanza expirada",
+            fecha_aplicacion=ahora - timedelta(days=5),
+            fecha_fin=fin_expirada,
+            activa=True,
+        )
+        perfil.aplicar_sancion(sancion_vigente)
+        perfil.aplicar_sancion(sancion_expirada)
+        perfil_repo.guardar(perfil)
+
+        # La columna persiste el valor exacto
+        modelos = {m.id: m for m in db_session.query(SancionModel).all()}
+        assert modelos[sancion_vigente.id].fecha_fin == fin_vigente
+        assert modelos[sancion_expirada.id].fecha_fin == fin_expirada
+
+        # Al recargar, la entidad reconstruye fecha_fin y su vigencia
+        obtenido = perfil_repo.obtener_por_usuario(usuario_id)
+        assert obtenido is not None
+        recargadas = {s.id: s for s in obtenido.sanciones}
+        assert recargadas[sancion_vigente.id].fecha_fin == fin_vigente
+        assert recargadas[sancion_vigente.id].esta_vigente() is True
+        assert recargadas[sancion_expirada.id].fecha_fin == fin_expirada
+        assert recargadas[sancion_expirada.id].esta_vigente() is False
+
+    def test_obtener_por_nivel_solo_devuelve_ese_nivel(self, perfil_repo, usuario_factory):
+        """RF-11: obtener_por_nivel devuelve solo los perfiles de ese nivel."""
+        usuarios_bajos = [usuario_factory(), usuario_factory()]
+        usuarios_otros = [usuario_factory(), usuario_factory()]
+
+        for usuario in (*usuarios_bajos, *usuarios_otros):
+            perfil_repo.guardar(PerfilReputacion.crear_para_usuario(usuario))
+
+        # Bajar a BAJO solo a los dos primeros (500 - 300 = 200 → BAJO)
+        for usuario in usuarios_bajos:
+            perfil = perfil_repo.obtener_por_usuario(usuario)
+            assert perfil is not None
+            perfil.puntaje = perfil.puntaje.restar(300)
+            perfil.recalcular_nivel()
+            perfil_repo.guardar(perfil)
+
+        perfiles_bajos = perfil_repo.obtener_por_nivel(NivelReputacion.BAJO)
+
+        assert {p.usuario_id for p in perfiles_bajos} == set(usuarios_bajos)
+        assert all(p.nivel == NivelReputacion.BAJO for p in perfiles_bajos)
+        # Un nivel sin perfiles devuelve lista vacía
+        assert perfil_repo.obtener_por_nivel(NivelReputacion.EXCELENTE) == []
