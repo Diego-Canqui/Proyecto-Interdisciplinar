@@ -19,6 +19,11 @@ from prestamos_recursos.contexts.prestamos.infrastructure.models.garantia_model 
 
 config = context.config
 
+import os
+db_url = os.getenv("DATABASE_URL")
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
@@ -30,11 +35,11 @@ def run_migrations_offline() -> None:
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
-        dialect_opts={"server_side_cursors": True},
+        dialect_opts={"paramstyle": "named"},
     )
 
     with context.begin_transaction():
-        context.run_migrations(transaction_per_migration=True)
+        context.run_migrations()
 
 def run_migrations_online() -> None:
     connectable = engine_from_config(
