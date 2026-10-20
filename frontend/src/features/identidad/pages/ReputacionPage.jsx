@@ -52,7 +52,7 @@ export default function ReputacionPage() {
           {error}
         </div>
         <button
-          onClick={() => navigate("/")}
+          onClick={() => navigate("/recursos")}
           style={{
             marginTop: "1rem",
             padding: "0.5rem 1rem",
