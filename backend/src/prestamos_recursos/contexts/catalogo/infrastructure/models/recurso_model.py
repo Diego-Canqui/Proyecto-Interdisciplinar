@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from uuid import UUID
 
 from sqlalchemy import Enum as SAEnum, String, Text
@@ -13,7 +14,9 @@ class RecursoModel(Base):
     """Modelo SQLAlchemy correspondiente para la tabla de base de datos de recursos."""
 
     __tablename__ = "recursos"
-    __table_args__ = {"schema": "catalogo"}
+    __table_args__ = (
+        None if os.getenv("TESTING") == "1" else {"schema": "catalogo"}
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
     nombre: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -59,7 +59,32 @@ class RecursoApplicationService:
             descripcion=recurso.descripcion,
             categoria=recurso.categoria,
             estado=recurso.estado,
+            marca=recurso.ficha_tecnica.marca,
+            modelo=recurso.ficha_tecnica.modelo,
+            numero_serie=recurso.ficha_tecnica.numero_serie,
+            color=recurso.ficha_tecnica.color,
+            estado_fisico=recurso.ficha_tecnica.estado_fisico,
+            foto_url=recurso.ficha_tecnica.foto_url,
         )
+
+    def buscar(self, filtro: str = "") -> list[RecursoDTO]:
+        recursos = self._recurso_repository.buscar(filtro)
+        return [
+            RecursoDTO(
+                id=r.id,
+                nombre=r.nombre,
+                descripcion=r.descripcion,
+                categoria=r.categoria,
+                estado=r.estado,
+                marca=r.ficha_tecnica.marca,
+                modelo=r.ficha_tecnica.modelo,
+                numero_serie=r.ficha_tecnica.numero_serie,
+                color=r.ficha_tecnica.color,
+                estado_fisico=r.ficha_tecnica.estado_fisico,
+                foto_url=r.ficha_tecnica.foto_url,
+            )
+            for r in recursos
+        ]
 
     def buscar_disponibles(self, categoria: str | None = None) -> list[RecursoDTO]:
         recursos = self._recurso_repository.buscar_disponibles(categoria or "")
@@ -70,6 +95,12 @@ class RecursoApplicationService:
                 descripcion=r.descripcion,
                 categoria=r.categoria,
                 estado=r.estado,
+                marca=r.ficha_tecnica.marca,
+                modelo=r.ficha_tecnica.modelo,
+                numero_serie=r.ficha_tecnica.numero_serie,
+                color=r.ficha_tecnica.color,
+                estado_fisico=r.ficha_tecnica.estado_fisico,
+                foto_url=r.ficha_tecnica.foto_url,
             )
             for r in recursos
         ]
