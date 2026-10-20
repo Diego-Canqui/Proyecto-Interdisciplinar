@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
@@ -17,6 +18,17 @@ class SqlPrestamoRepository(PrestamoRepository):
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def _to_entity(self, modelo: PrestamoModel) -> Prestamo:
+        return Prestamo(
+            id=modelo.id,
+            reserva_id=modelo.reserva_id,
+            recurso_id=modelo.recurso_id,
+            usuario_id=modelo.usuario_id,
+            fecha_inicio=modelo.fecha_inicio,
+            fecha_fin=modelo.fecha_fin,
+            estado=EstadoPrestamo(modelo.estado),
+        )
 
     def guardar(self, prestamo: Prestamo) -> None:
         modelo = self._session.get(PrestamoModel, prestamo.id)
@@ -35,19 +47,23 @@ class SqlPrestamoRepository(PrestamoRepository):
         modelo = self._session.get(PrestamoModel, id)
         if modelo is None:
             return None
-
-        return Prestamo(
-            id=modelo.id,
-            reserva_id=modelo.reserva_id,
-            recurso_id=modelo.recurso_id,
-            usuario_id=modelo.usuario_id,
-            fecha_inicio=modelo.fecha_inicio,
-            fecha_fin=modelo.fecha_fin,
-            estado=EstadoPrestamo(modelo.estado),
-        )
+        return self._to_entity(modelo)
 
     def obtener_activos(self) -> list[Prestamo]:
-        raise NotImplementedError
+        modelos = (
+            self._session.scalars(
+                select(PrestamoModel).where(PrestamoModel.estado == EstadoPrestamo.ACTIVO)
+            )
+            .all()
+        )
+        return [self._to_entity(m) for m in modelos]
 
     def obtener_por_usuario(self, id_usuario: UUID) -> list[Prestamo]:
-        raise NotImplementedError
+        modelos = (
+            self._session.scalars(
+                select(PrestamoModel).where(PrestamoModel.usuario_id == id_usuario)
+            )
+            .all()
+        )
+        return [self._to_entity(m) for m in modelos]
+
