@@ -145,13 +145,24 @@ Reglas: cuerpo a 16px o más; **máximo 3 tamaños por pantalla**; títulos con
 
 - Todo el contenido va dentro de `.contenedor` (máximo 1120px, padding lateral).
 - Formularios y login usan `.contenedor--estrecho` (420px).
-- Cada página: `<main className="contenedor pagina">` con `.pagina__cabecera`,
-  `.pagina__titulo` y `.pagina__subtitulo`.
-- Barra superior: `.navbar` con `.navbar__contenido contenedor`, `.navbar__marca`,
-  `.navbar__enlaces`, `.navbar__enlace` (activo con `.navbar__enlace--activo`) y
-  `.navbar__menu-boton` para móvil. En `<900px` los enlaces se ocultan y se muestran añadiendo
-  `.navbar__enlaces--abierto` cuando se pulsa el botón.
-- La navbar la monta quien integre el layout común; cada feature solo aporta su página.
+- **El layout monta la estructura; la página aporta solo su contenido.** El layout compartido
+  (`frontend/src/layout/`, lo mantiene la Persona 1) pinta la barra superior y el
+  `<main className="contenedor pagina">` donde se renderiza la ruta activa. **Cada página NO monta
+  `<main>` ni la navbar**: entrega únicamente su contenido, con `.pagina__cabecera`,
+  `.pagina__titulo` y `.pagina__subtitulo`. Debe haber un único `<main>` por documento, el del
+  layout; `ReputacionPage` y `UsuariosPage` ya lo cumplen, mientras que las páginas de `catalogo`,
+  `reservas` y `prestamos` conservan su `<main>` anidado como deuda de sus dueños hasta que se
+  rediseñen con esta guía.
+- Barra superior (la monta el layout): `<header className="navbar">` con
+  `.navbar__contenido contenedor`, `.navbar__marca` y un único
+  `<nav className="navbar__enlaces" aria-label="Navegación principal">` con `.navbar__enlace`
+  (activo con `.navbar__enlace--activo`) y «Cerrar sesión» como
+  `<button className="boton boton--fantasma">`. La marca es texto plano y **no** es un enlace: no
+  hay página de Inicio y la raíz `/` redirige a `/recursos`.
+- **Sin menú móvil por ahora**: `.navbar__menu-boton` y `.navbar__enlaces--abierto` existen en
+  `global.css`, pero el layout actual **no** los usa. Por debajo de 900px `.navbar__enlaces` se
+  oculta y la barra se queda solo con la marca; es deuda de responsive aceptada (no es un fallo de
+  las pantallas, pero tampoco hay forma de navegar por la barra a ese ancho).
 
 ### Rutas actuales y visibilidad por rol
 
@@ -397,3 +408,10 @@ corregirlo antes. El tema oscuro no se implementa hasta que el equipo lo acuerde
 Cualquier cambio de token, clase o patrón se avisa al equipo y se actualiza este documento y
 `tokens.css` en el mismo PR. Los archivos compartidos se avisan antes de tocarlos (ver `README.md`).
 No se crean variantes locales por feature.
+
+Cambios registrados:
+
+- **2026-10-20** — El layout compartido (`frontend/src/layout/`) pasa a montar la navbar y el
+  `<main className="contenedor pagina">`, y cada página aporta solo su contenido (§6).
+  `ReputacionPage` y `UsuariosPage` dejan de aportar su propio `<main>`, la raíz `/` redirige a
+  `/recursos` (no hay página de Inicio) y el menú móvil queda sin implementar. Spec 003.
