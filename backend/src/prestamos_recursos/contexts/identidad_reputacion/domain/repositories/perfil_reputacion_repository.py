@@ -3,7 +3,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from uuid import UUID
 
-from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import PerfilReputacion
+from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import (
+    PerfilReputacion,
+)
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
+    NivelReputacion,
+)
 
 
 class PerfilReputacionRepository(ABC):
@@ -15,4 +20,12 @@ class PerfilReputacionRepository(ABC):
 
     @abstractmethod
     def obtener_por_id(self, id: UUID) -> PerfilReputacion | None:
+        ...
+
+    @abstractmethod
+    def obtener_por_usuario(self, usuario_id: UUID) -> PerfilReputacion | None:
+        ...
+
+    @abstractmethod
+    def obtener_por_nivel(self, nivel: NivelReputacion) -> list[PerfilReputacion]:
         ...

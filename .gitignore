@@ -23,3 +23,10 @@ dist/
 .vscode/
 .idea/
 EOF
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.env
+dist/
+.obsidian/

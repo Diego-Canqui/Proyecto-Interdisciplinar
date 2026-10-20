@@ -25,7 +25,9 @@ class Reserva(BaseEntity):
         raise NotImplementedError
 
     def convertir_a_prestamo(self) -> None:
-        raise NotImplementedError
+        if self.estado != EstadoReserva.CONFIRMADA:
+            raise ValueError("Solo se pueden convertir reservas confirmadas")
+        self.estado = EstadoReserva.CONVERTIDA
 
     def esta_vigente(self) -> bool:
         raise NotImplementedError

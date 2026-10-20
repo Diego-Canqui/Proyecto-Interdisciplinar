@@ -1,0 +1,102 @@
+/**
+ * Tokens de diseño — "Teal Campus".
+ * Fuente de verdad: docs/diseno/guia-ui.md.
+ * Solo se declaran variables; no hay estilos de componentes aquí.
+ * Norma: los componentes usan var(--token), nunca valores literales.
+ */
+:root {
+  /* Marca */
+  --primario: #0F766E;            /* color de marca: enlaces, botón principal, foco */
+  --primario-hover: #115E59;      /* marca en hover/activo */
+  --primario-suave: #DFF1EF;      /* fondo de marca: enlace activo, selección */
+  --sobre-primario: #FFFFFF;      /* texto sobre fondos de marca y de estado */
+
+  /* Texto y superficies */
+  --texto: #14282B;               /* texto principal */
+  --texto-suave: #4F6366;         /* texto secundario, ayudas y metadatos */
+  --fondo: #F4F8F7;               /* fondo de la app */
+  --superficie: #FFFFFF;          /* fondo de tarjetas, tablas, navbar y controles */
+  --borde: #D9E3E2;               /* bordes y separadores */
+
+  /* Estados (color fuerte + fondo suave) */
+  --exito: #3F6212;               /* éxito: texto e iconos */
+  --exito-suave: #EEF5E1;         /* éxito: fondo */
+  --aviso: #A94A07;               /* advertencia: texto e iconos */
+  --aviso-suave: #FEF3DC;         /* advertencia: fondo */
+  --error: #BE123C;               /* error y peligro: texto, iconos, botón */
+  --error-hover: #9F1239;         /* error en hover: botón de peligro */
+  --error-suave: #FDE8ED;         /* error: fondo */
+  --info: #1D4ED8;                /* información: texto e iconos */
+  --info-suave: #E8EEFC;          /* información: fondo */
+  --neutra: #4F6366;              /* estado neutro: texto e iconos */
+  --neutra-suave: #EDF2F1;        /* estado neutro: fondo */
+
+  /* Tipografía */
+  --fuente-base: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; /* fuente del sistema */
+  --texto-xs: 0.75rem;            /* ayudas, insignias, cabeceras de tabla */
+  --texto-sm: 0.875rem;           /* texto secundario y tablas */
+  --texto-base: 1rem;             /* cuerpo (mínimo en la UI) */
+  --texto-lg: 1.125rem;           /* subtítulos y texto destacado */
+  --texto-xl: 1.375rem;           /* título de sección */
+  --texto-2xl: 1.75rem;           /* título de página */
+  --peso-normal: 400;             /* cuerpo */
+  --peso-medio: 500;              /* etiquetas y botones */
+  --peso-fuerte: 600;             /* marca y énfasis */
+  --peso-titulo: 700;             /* títulos */
+  --interlineado: 1.5;            /* cuerpo */
+  --interlineado-titulo: 1.2;     /* títulos */
+
+  /* Espaciado (escala de 4px) */
+  --espacio-1: 0.25rem;           /* 4px */
+  --espacio-2: 0.5rem;            /* 8px */
+  --espacio-3: 0.75rem;           /* 12px */
+  --espacio-4: 1rem;              /* 16px */
+  --espacio-5: 1.5rem;            /* 24px */
+  --espacio-6: 2rem;              /* 32px */
+  --espacio-7: 3rem;              /* 48px */
+  --espacio-8: 4rem;              /* 64px */
+
+  /* Radios */
+  --radio-sm: 6px;                /* enlaces de navbar y elementos pequeños */
+  --radio-md: 8px;                /* botones, inputs y alertas */
+  --radio-lg: 12px;               /* tarjetas, tablas y contenedores */
+  --radio-completo: 999px;        /* insignias y píldoras */
+
+  /* Sombras (sutiles) */
+  --sombra-sm: 0 1px 2px rgba(20, 40, 43, 0.06);    /* tarjetas en reposo */
+  --sombra-md: 0 4px 12px rgba(20, 40, 43, 0.08);   /* elementos flotantes o hover */
+  --sombra-lg: 0 12px 24px rgba(20, 40, 43, 0.10);  /* modales y menús desplegados */
+  --anillo-foco: 0 0 0 3px rgba(15, 118, 110, 0.30); /* halo de foco además del outline */
+
+  /* Medidas de layout */
+  --ancho-contenido: 1120px;      /* ancho máximo del contenido */
+  --ancho-formulario: 420px;      /* ancho máximo de formularios y login */
+  --alto-navbar: 60px;            /* alto de la barra superior */
+
+  /* Movimiento */
+  --transicion: 150ms ease;       /* transición estándar de hover y foco */
+}
+
+/*
+ * Tema oscuro (futuro, NO activo).
+ * Basta con redefinir estos tokens en [data-tema="oscuro"] sobre <html> o <body>;
+ * ningún componente cambia porque todos leen var(--token).
+ *
+ * [data-tema="oscuro"] {
+ *   --fondo: ...;            // fondo de la app
+ *   --superficie: ...;       // tarjetas, tablas, navbar
+ *   --texto: ...;            // texto principal
+ *   --texto-suave: ...;      // texto secundario
+ *   --borde: ...;            // bordes y separadores
+ *   --primario: ...;         // marca (debe mantener contraste sobre --fondo)
+ *   --primario-suave: ...;   // fondo de marca (en oscuro, un tono apagado)
+ *   --exito-suave: ...;      // fondo de éxito
+ *   --aviso-suave: ...;      // fondo de advertencia
+ *   --error-suave: ...;      // fondo de error
+ *   --info-suave: ...;       // fondo de información
+ *   --neutra-suave: ...;     // fondo neutro
+ *   --sombra-sm: ...;        // sombras más marcadas en fondo oscuro
+ *   --sombra-md: ...;
+ *   --sombra-lg: ...;
+ * }
+ */
