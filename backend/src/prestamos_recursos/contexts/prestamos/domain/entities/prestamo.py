@@ -38,6 +38,12 @@ class Prestamo(BaseEntity):
             raise ValueError(f"No se puede iniciar un préstamo en estado {self.estado.value}")
         self.estado = EstadoPrestamo.ACTIVO
 
+    def marcar_entregado(self) -> None:
+        """Marca el préstamo como entregado al usuario tras confirmar la inspección."""
+        if self.estado != EstadoPrestamo.ACTIVO:
+            raise ValueError("Sólo pueden marcarse como entregados préstamos activos")
+        self.estado = EstadoPrestamo.ENTREGADO
+
     def calcular_dias_retraso(self, fecha_referencia: datetime | None = None) -> int:
         """Calcula cuántos días de retraso hay respecto a fecha_fin."""
         fecha = _ensure_utc(fecha_referencia) if fecha_referencia is not None else datetime.now(UTC)

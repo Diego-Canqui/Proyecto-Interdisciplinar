@@ -19,6 +19,23 @@ class Checklist(BaseEntity):
     fotos_urls: list[str] = field(default_factory=list)
     completo: bool
 
+    def agregar_item(self, observaciones: str, fotos_urls: list[str]) -> None:
+        if self.completo:
+            raise ValueError("No se pueden modificar checklists confirmados")
+        texto = observaciones.strip()
+        if not texto and not fotos_urls:
+            raise ValueError("El ítem debe incluir observaciones o al menos una foto")
+        if texto:
+            self.observaciones = f"{self.observaciones}\n{texto}".strip()
+        self.fotos_urls.extend(fotos_urls)
+
+    def confirmar(self) -> None:
+        if self.completo:
+            raise ValueError("El checklist ya está confirmado")
+        if not self.observaciones.strip() and not self.fotos_urls:
+            raise ValueError("El checklist debe incluir al menos un ítem")
+        self.completo = True
+
     def crear_inicial(self) -> None:
         raise NotImplementedError
 

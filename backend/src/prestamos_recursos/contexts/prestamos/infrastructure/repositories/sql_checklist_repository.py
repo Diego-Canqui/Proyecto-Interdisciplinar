@@ -2,21 +2,17 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from prestamos_recursos.contexts.prestamos.domain.entities.checklist import Checklist
-from prestamos_recursos.contexts.prestamos.domain.repositories.checklist_repository import ChecklistRepository
-
-
-from __future__ import annotations
-
-from uuid import UUID
-
-from sqlalchemy.orm import Session
-
-from prestamos_recursos.contexts.prestamos.domain.entities.checklist import Checklist
-from prestamos_recursos.contexts.prestamos.domain.repositories.checklist_repository import ChecklistRepository
-from prestamos_recursos.contexts.prestamos.infrastructure.models.checklist_model import ChecklistModel
+from prestamos_recursos.contexts.prestamos.domain.enums.tipo_checklist import TipoChecklist
+from prestamos_recursos.contexts.prestamos.domain.repositories.checklist_repository import (
+    ChecklistRepository,
+)
+from prestamos_recursos.contexts.prestamos.infrastructure.models.checklist_model import (
+    ChecklistModel,
+)
 
 
 class SqlChecklistRepository(ChecklistRepository):
@@ -60,3 +56,13 @@ class SqlChecklistRepository(ChecklistRepository):
             return None
         return self._to_entity(modelo)
 
+    def obtener_por_prestamo_y_tipo(
+        self, prestamo_id: UUID, tipo: TipoChecklist
+    ) -> Checklist | None:
+        modelo = self._session.scalar(
+            select(ChecklistModel).where(
+                ChecklistModel.prestamo_id == prestamo_id,
+                ChecklistModel.tipo == tipo,
+            )
+        )
+        return self._to_entity(modelo) if modelo is not None else None

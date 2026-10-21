@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from prestamos_recursos.contexts.prestamos.domain.entities.garantia import Garantia
-from prestamos_recursos.contexts.prestamos.domain.repositories.garantia_repository import GarantiaRepository
+from prestamos_recursos.contexts.prestamos.domain.repositories.garantia_repository import (
+    GarantiaRepository,
+)
+from prestamos_recursos.contexts.prestamos.domain.value_objects.compromiso_responsabilidad import (
+    CompromisoResponsabilidad,
+)
 from prestamos_recursos.contexts.prestamos.infrastructure.models.garantia_model import GarantiaModel
 
 
@@ -16,7 +22,6 @@ class SqlGarantiaRepository(GarantiaRepository):
         self._session = session
 
     def _to_entity(self, modelo: GarantiaModel) -> Garantia:
-        # NOTE: ``compromiso`` is a value object; here we store only its textual content.
         return Garantia(
             id=modelo.id,
             prestamo_id=modelo.prestamo_id,
@@ -24,7 +29,12 @@ class SqlGarantiaRepository(GarantiaRepository):
             estado=modelo.estado,
             fecha_registro=modelo.fecha_registro,
             fecha_liberacion=modelo.fecha_liberacion,
-            compromiso=modelo.compromiso_contenido,  # simple string mapping
+            compromiso=CompromisoResponsabilidad(
+                contenido=modelo.compromiso_contenido,
+                fecha_firma=modelo.compromiso_fecha_firma,
+                firma_url=modelo.compromiso_firma_url,
+                testigo=modelo.compromiso_testigo,
+            ),
         )
 
     def _to_model(self, garantia: Garantia) -> GarantiaModel:
@@ -37,7 +47,10 @@ class SqlGarantiaRepository(GarantiaRepository):
         modelo.estado = garantia.estado
         modelo.fecha_registro = garantia.fecha_registro
         modelo.fecha_liberacion = garantia.fecha_liberacion
-        modelo.compromiso_contenido = getattr(garantia, "compromiso", "")
+        modelo.compromiso_contenido = garantia.compromiso.contenido
+        modelo.compromiso_fecha_firma = garantia.compromiso.fecha_firma
+        modelo.compromiso_firma_url = garantia.compromiso.firma_url
+        modelo.compromiso_testigo = garantia.compromiso.testigo
         return modelo
 
     def guardar(self, garantia: Garantia) -> None:
@@ -52,3 +65,9 @@ class SqlGarantiaRepository(GarantiaRepository):
         if modelo is None:
             return None
         return self._to_entity(modelo)
+
+    def obtener_por_prestamo(self, prestamo_id: UUID) -> Garantia | None:
+        modelo = self._session.scalar(
+            select(GarantiaModel).where(GarantiaModel.prestamo_id == prestamo_id)
+        )
+        return self._to_entity(modelo) if modelo is not None else None
