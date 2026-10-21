@@ -12,9 +12,15 @@ router = APIRouter(prefix="/prestamos", tags=["Préstamos"])
 
 
 @router.post("/{id_prestamo}/devolucion")
-def registrar_devolucion(id_prestamo: UUID):
-        service.procesar_devolucion(id_prestamo)
-    return {"detalle": "Devolución procesada"}
+def registrar_devolucion(
+    id_prestamo: UUID,
+    service: PrestamoService = Depends(get_prestamo_service),
+) -> dict:
+    """Endpoint placeholder for processing a loan return.
+
+    Currently not implemented; returns HTTP 501 to signal pending implementation.
+    """
+    raise HTTPException(status_code=501, detail="Pendiente de implementar")
 
 
 @router.get("/usuarios/{id_usuario}/historial", response_model=list[PrestamoDTO])
