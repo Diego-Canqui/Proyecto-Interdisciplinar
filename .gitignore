@@ -1,32 +1,15 @@
-cat > .gitignore << 'EOF'
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-
-# Entornos virtuales
-.venv/
-venv/
-
-# Variables de entorno y secretos
 .env
 .env.*
-
-# Excepciones para plantillas de configuración
 !.env.example
-
-# Frontend
+.venv/
+venv/
+backend/.venv/
+**/__pycache__/
+*.py[cod]
+*.db
 node_modules/
 dist/
-
-# Editores
 .vscode/
 .idea/
-EOF
-.venv/
-__pycache__/
-*.pyc
-node_modules/
-.env
-dist/
 .obsidian/
+backend/src/*.egg-info/
