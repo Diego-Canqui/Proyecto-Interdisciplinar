@@ -39,7 +39,7 @@ export default function UsuariosPage() {
   };
 
   return (
-    <main>
+    <div>
       <h1>Usuarios</h1>
       <form onSubmit={handleSubmit}>
         <input placeholder="Nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} required />
@@ -66,6 +66,6 @@ export default function UsuariosPage() {
           </li>
         ))}
       </ul>
-    </main>
+    </div>
   );
 }
