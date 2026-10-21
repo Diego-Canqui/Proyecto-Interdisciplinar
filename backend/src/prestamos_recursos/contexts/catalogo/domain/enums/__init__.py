@@ -1,0 +1,1 @@
+from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso

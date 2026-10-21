@@ -18,10 +18,17 @@ class Recurso(BaseEntity):
     ficha_tecnica: FichaTecnica
 
     def marcar_disponible(self) -> None:
-        raise NotImplementedError
+        """Marca el recurso como disponible si cumple con las condiciones."""
+        if self.estado == EstadoRecurso.FUERA_DE_SERVICIO:
+            raise ValueError("No se puede marcar como disponible un recurso fuera de servicio.")
+        self.estado = EstadoRecurso.DISPONIBLE
 
     def marcar_no_disponible(self) -> None:
-        raise NotImplementedError
+        """Marca el recurso como en uso."""
+        self.estado = EstadoRecurso.EN_USO
 
-    def actualizar_estado(self) -> None:
-        raise NotImplementedError
+    def actualizar_estado(self, nuevo_estado: EstadoRecurso) -> None:
+        """Actualiza el estado del recurso con validación de dominio."""
+        if not isinstance(nuevo_estado, EstadoRecurso):
+            raise TypeError("El estado debe ser una instancia de EstadoRecurso.")
+        self.estado = nuevo_estado

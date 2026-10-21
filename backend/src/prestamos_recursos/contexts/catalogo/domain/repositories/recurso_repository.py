@@ -23,5 +23,9 @@ class RecursoRepository(ABC):
         ...
 
     @abstractmethod
+    def buscar(self, filtro: str = "") -> list[Recurso]:
+        ...
+
+    @abstractmethod
     def actualizar_estado(self, id_recurso: UUID, estado: EstadoRecurso) -> None:
         ...

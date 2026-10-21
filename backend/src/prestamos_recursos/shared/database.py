@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+import os
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -6,15 +7,17 @@ from sqlalchemy.pool import StaticPool
 
 from prestamos_recursos.config import settings
 
-engine_options: dict[str, object] = {"pool_pre_ping": True}
-if settings.database_url.startswith("sqlite"):
-    engine_options["connect_args"] = {"check_same_thread": False}
-    if settings.database_url.endswith(":memory:") or settings.database_url.endswith("sqlite://"):
-        engine_options["poolclass"] = StaticPool
+DATABASE_URL = os.getenv("DATABASE_URL", settings.database_url)
+if os.getenv("TESTING") == "1":
+    DATABASE_URL = "sqlite+pysqlite:///:memory:"
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+else:
+    engine = create_engine(settings.database_url, pool_pre_ping=True)
 
-engine = create_engine(settings.database_url, **engine_options)
-if engine.dialect.name == "sqlite":
-    engine = engine.execution_options(schema_translate_map={"reservas": None})
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
@@ -23,6 +26,19 @@ class Base(DeclarativeBase):
 
 
 def get_session() -> Iterator[Session]:
-    """Dependencia de FastAPI: una sesión por petición."""
+    """Dependencia de FastAPI: una sesión por petición.
+
+    Frontera de transacción (unit of work, D13): confirma al terminar la petición
+    con normalidad y revierte si hubo excepción, de modo que una respuesta 4xx/5xx
+    no deje escrituras parciales confirmadas. Los repositorios solo hacen `flush`
+    y se apoyan en esta frontera: hay un único dueño de la transacción.
+    """
     with SessionLocal() as session:
-        yield session
+        try:
+            yield session
+            # La petición terminó con normalidad: confirmar la unidad de trabajo
+            session.commit()
+        except Exception:
+            # Revertir lo parcial y re-lanzar: la excepción no se traga aquí
+            session.rollback()
+            raise

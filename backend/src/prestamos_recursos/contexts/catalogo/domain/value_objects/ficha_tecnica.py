@@ -15,4 +15,10 @@ class FichaTecnica:
     foto_url: str
 
     def es_valida(self) -> bool:
-        raise NotImplementedError
+        """Verifica si la ficha técnica es válida asegurando que los campos esenciales no estén vacíos."""
+        return bool(
+            self.marca.strip()
+            and self.modelo.strip()
+            and self.numero_serie.strip()
+            and self.estado_fisico.strip()
+        )

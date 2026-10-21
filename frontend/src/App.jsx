@@ -1,5 +1,6 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
-import { LoginPage } from "./features/identidad";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import Layout from "./layout/Layout.jsx";
+import { LoginPage, RegistroPage, UsuariosPage, ReputacionPage } from "./features/identidad";
 import { BuscarRecursosPage } from "./features/catalogo";
 import { MisReservasPage } from "./features/reservas";
 import { HistorialPage } from "./features/prestamos";
@@ -9,9 +10,15 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/recursos" element={<BuscarRecursosPage />} />
-        <Route path="/reservas" element={<MisReservasPage />} />
-        <Route path="/historial" element={<HistorialPage />} />
+        <Route path="/registro" element={<RegistroPage />} />
+        <Route element={<Layout />}>
+          <Route path="/usuarios" element={<UsuariosPage />} />
+          <Route path="/reputacion" element={<ReputacionPage />} />
+          <Route path="/recursos" element={<BuscarRecursosPage />} />
+          <Route path="/reservas" element={<MisReservasPage />} />
+          <Route path="/historial" element={<HistorialPage />} />
+        </Route>
+        <Route path="/" element={<Navigate to="/recursos" replace />} />
       </Routes>
     </BrowserRouter>
   );

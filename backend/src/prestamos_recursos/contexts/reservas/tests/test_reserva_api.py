@@ -5,26 +5,47 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
+from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
+    UsuarioDTO,
+)
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import RolUsuario
+from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies import (
+    get_current_user,
+)
 from prestamos_recursos.contexts.reservas.infrastructure.models.reserva_model import (
     ReservaModel,
 )
 from prestamos_recursos.main import app
 from prestamos_recursos.shared.database import SessionLocal
 
+ID_USUARIO_PRUEBA = uuid4()
+USUARIO_PRUEBA = UsuarioDTO(
+    id=ID_USUARIO_PRUEBA,
+    nombre="Usuario de prueba",
+    correo="reservas@test.com",
+    telefono=None,
+    roles=[RolUsuario.ESTUDIANTE],
+    estado=True,
+)
+
 
 @pytest.fixture
 def cliente():
+    app.dependency_overrides[get_current_user] = lambda: USUARIO_PRUEBA
     with TestClient(app) as client:
         with SessionLocal() as session:
             session.execute(delete(ReservaModel))
             session.commit()
-        yield client
+        try:
+            yield client
+        finally:
+            app.dependency_overrides.pop(get_current_user, None)
 
 
 def datos_reserva(horas=2, recurso_id=None):
     inicio = datetime.now(UTC) + timedelta(hours=horas)
     return {
-        "usuario_id": str(uuid4()),
+        "usuario_id": str(ID_USUARIO_PRUEBA),
         "recurso_id": recurso_id or str(uuid4()),
         "fecha_inicio": inicio.isoformat(),
         "fecha_fin": (inicio + timedelta(hours=1)).isoformat(),
@@ -61,6 +82,16 @@ def test_confirmar_y_listar_por_usuario(cliente):
     listado = cliente.get(f"/reservas/usuario/{datos['usuario_id']}")
     assert listado.status_code == 200
     assert [reserva["id"] for reserva in listado.json()] == [id_reserva]
+
+
+def test_usuario_no_puede_reservar_a_nombre_de_otro(cliente):
+    datos = datos_reserva() | {"usuario_id": str(uuid4())}
+    assert cliente.post("/reservas", json=datos).status_code == 403
+
+
+def test_usuario_no_puede_listar_reservas_de_otro(cliente):
+    respuesta = cliente.get(f"/reservas/usuario/{uuid4()}")
+    assert respuesta.status_code == 403
 
 
 def test_rechaza_cruce_y_permite_horarios_libres(cliente):

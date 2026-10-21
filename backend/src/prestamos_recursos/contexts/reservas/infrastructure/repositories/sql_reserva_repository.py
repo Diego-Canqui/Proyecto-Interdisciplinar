@@ -23,24 +23,23 @@ class SqlReservaRepository(ReservaRepository):
         self._session = session
 
     def guardar(self, reserva: Reserva) -> None:
-        modelo = ReservaModel(
-            id=reserva.id,
-            usuario_id=reserva.usuario_id,
-            recurso_id=reserva.recurso_id,
-            fecha_inicio=reserva.fecha_inicio,
-            fecha_fin=reserva.fecha_fin,
-            estado=reserva.estado,
-        )
-        try:
-            self._session.merge(modelo)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
+        modelo = self._session.get(ReservaModel, reserva.id)
+        if modelo is None:
+            modelo = ReservaModel(id=reserva.id)
+            self._session.add(modelo)
+
+        modelo.usuario_id = reserva.usuario_id
+        modelo.recurso_id = reserva.recurso_id
+        modelo.fecha_inicio = reserva.fecha_inicio
+        modelo.fecha_fin = reserva.fecha_fin
+        modelo.estado = reserva.estado
 
     def obtener_por_id(self, id: UUID) -> Reserva | None:
         modelo = self._session.get(ReservaModel, id)
-        return self._a_entidad(modelo) if modelo is not None else None
+        if modelo is None:
+            return None
+
+        return self._a_entidad(modelo)
 
     def obtener_por_usuario(self, id_usuario: UUID) -> list[Reserva]:
         consulta = (

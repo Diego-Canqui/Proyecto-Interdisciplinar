@@ -1,16 +1,20 @@
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import HTMLResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
+from prestamos_recursos.config import settings
 from prestamos_recursos.contexts.catalogo.presentation.recurso_controller import (
     router as recurso_router,
 )
 from prestamos_recursos.contexts.identidad_reputacion.presentation.autenticacion_controller import (
     router as autenticacion_router,
+)
+from prestamos_recursos.contexts.identidad_reputacion.presentation.reputacion_controller import (
+    router as reputacion_router,
+)
+from prestamos_recursos.contexts.identidad_reputacion.presentation.usuario_controller import (
+    router as usuario_router,
 )
 from prestamos_recursos.contexts.prestamos.presentation.prestamo_controller import (
     router as prestamo_router,
@@ -19,87 +23,33 @@ from prestamos_recursos.contexts.reservas.presentation.reserva_controller import
     router as reserva_router,
 )
 from prestamos_recursos.shared.database import Base, engine
+from prestamos_recursos.shared.rate_limit import limiter
 
+app = FastAPI(title="Proyecto Interdisciplinar - Préstamo de Recursos")
 
-@asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    Base.metadata.create_all(bind=engine)
-    yield
-
-app = FastAPI(
-    title="Proyecto Interdisciplinar - Préstamo de Recursos",
-    docs_url=None,
-    swagger_ui_parameters={"docExpansion": "none", "defaultModelsExpandDepth": -1},
-    lifespan=lifespan,
-)
-
-
-@app.get("/docs", include_in_schema=False)
-def documentacion() -> HTMLResponse:
-    pagina = get_swagger_ui_html(
-        openapi_url=app.openapi_url,
-        title=f"{app.title} - Documentación",
-        swagger_ui_parameters=app.swagger_ui_parameters,
-    )
-    estilos = """
-    <style>
-      body, .swagger-ui, .swagger-ui .scheme-container,
-      .swagger-ui .opblock-body, .swagger-ui .responses-wrapper,
-      .swagger-ui table tbody tr td {
-        background: #fff !important;
-        color: #111 !important;
-      }
-      .swagger-ui .topbar { display: none; }
-      .swagger-ui .opblock,
-      .swagger-ui .opblock.opblock-get,
-      .swagger-ui .opblock.opblock-post,
-      .swagger-ui .opblock.opblock-put,
-      .swagger-ui .opblock.opblock-patch,
-      .swagger-ui .opblock.opblock-delete {
-        background: #fff !important;
-        border: 1px solid #555 !important;
-        box-shadow: none !important;
-      }
-      .swagger-ui .opblock-summary-method {
-        background: #111 !important;
-        color: #fff !important;
-        text-shadow: none !important;
-      }
-      .swagger-ui .btn,
-      .swagger-ui input,
-      .swagger-ui select,
-      .swagger-ui textarea {
-        background: #fff !important;
-        border: 1px solid #555 !important;
-        color: #111 !important;
-        box-shadow: none !important;
-      }
-      .swagger-ui .btn.execute {
-        background: #111 !important;
-        color: #fff !important;
-      }
-      .swagger-ui .opblock-tag,
-      .swagger-ui .opblock .opblock-summary-description,
-      .swagger-ui .response-col_status,
-      .swagger-ui .model-title,
-      .swagger-ui .parameter__name,
-      .swagger-ui .parameter__type {
-        color: #111 !important;
-      }
-      .swagger-ui a { color: #222 !important; }
-    </style>
-    """
-    contenido = pagina.body.decode().replace("</head>", f"{estilos}</head>")
-    return HTMLResponse(content=contenido)
-
+# CORS configurado desde settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # frontend en desarrollo (Vite)
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.on_event("startup")
+def crear_tablas() -> None:
+    # Provisional: sin Alembic todavía, se crean las tablas directo desde los modelos.
+    Base.metadata.create_all(bind=engine)
+
+
 app.include_router(autenticacion_router)
+app.include_router(usuario_router)
+app.include_router(reputacion_router)
 app.include_router(recurso_router)
 app.include_router(reserva_router)
 app.include_router(prestamo_router)
