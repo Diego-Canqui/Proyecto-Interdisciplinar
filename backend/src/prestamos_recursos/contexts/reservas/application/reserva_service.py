@@ -36,6 +36,25 @@ class ReservaService:
     def obtener_reserva(self, id_reserva: UUID) -> ReservaDTO:
         return ReservaDTO.model_validate(self._buscar_reserva(id_reserva))
 
+    def obtener_por_usuario(self, id_usuario: UUID) -> list[ReservaDTO]:
+        reservas = self._reserva_repository.obtener_por_usuario(id_usuario)
+        return [ReservaDTO.model_validate(reserva) for reserva in reservas]
+
+    def confirmar_reserva(self, id_reserva: UUID) -> ReservaDTO:
+        reserva = self._buscar_reserva(id_reserva)
+        reservas_activas = self._reserva_repository.obtener_activas_por_recurso(
+            reserva.recurso_id
+        )
+        if any(
+            otra.id != reserva.id and reserva.se_superpone_con(otra)
+            for otra in reservas_activas
+        ):
+            raise ValueError("el recurso ya tiene una reserva activa en ese horario")
+
+        reserva.confirmar()
+        self._reserva_repository.guardar(reserva)
+        return ReservaDTO.model_validate(reserva)
+
     def cancelar_reserva(self, id_reserva: UUID) -> bool:
         reserva = self._buscar_reserva(id_reserva)
         reserva.cancelar()

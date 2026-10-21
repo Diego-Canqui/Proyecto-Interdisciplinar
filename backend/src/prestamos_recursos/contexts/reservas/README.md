@@ -1,45 +1,55 @@
-# Avance de reservas
+# Reservas
 
-El módulo permite crear, consultar y cancelar reservas, y consultar la cola de un
-recurso. Usa almacenamiento en memoria: los datos se pierden al reiniciar y no se
-comparten entre procesos. La cola incluye reservas pendientes que no han vencido,
-ordenadas provisionalmente por fecha de inicio.
+El módulo permite crear, consultar, listar por usuario, confirmar y cancelar
+reservas, además de consultar la cola de un recurso. La API usa PostgreSQL y crea
+la tabla de Reservas al iniciar. Las reservas se conservan después de reiniciar
+el backend.
 
-## Probar la API
+## Iniciar el backend
 
-Desde `backend`, con las dependencias del proyecto instaladas:
+Desde la raíz del repositorio:
 
 ```bash
+cp .env.example .env
+docker compose up -d
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 uvicorn prestamos_recursos.main:app --reload --app-dir src
 ```
 
-Abrir `http://localhost:8000/docs` y buscar la sección Reservas:
+En Windows, activar el entorno con `.venv\Scripts\activate`. Abrir
+`http://localhost:8000/docs` y buscar Reservas.
+
+## Operaciones
 
 - `POST /reservas`: crear con `usuario_id`, `recurso_id`, `fecha_inicio` y `fecha_fin`.
 - `GET /reservas/{id_reserva}`: consultar por el ID devuelto al crear.
+- `GET /reservas/usuario/{id_usuario}`: listar por usuario.
+- `PATCH /reservas/{id_reserva}/confirmar`: confirmar una reserva pendiente vigente.
 - `PATCH /reservas/{id_reserva}/cancelar`: cancelar una reserva.
 - `GET /reservas/recurso/{id_recurso}/cola`: consultar la cola de espera.
 
-Los IDs deben ser UUID y las fechas deben tener un rango válido. Para probar la
-cola, usar fechas futuras con zona horaria, por ejemplo el sufijo `Z` para UTC.
-No se aceptan dos reservas activas del mismo recurso cuyos horarios se cruzan;
-si una termina justo cuando comienza la otra, ambas se permiten. La API responde
-con 404 si no existe la reserva, 409 si el horario está ocupado o no se puede
-cancelar en el estado actual, y 422 si los datos enviados son inválidos.
+Los IDs deben ser UUID y la fecha final debe ser posterior a la inicial. Se
+rechazan cruces con reservas pendientes o confirmadas del mismo recurso; los
+horarios consecutivos se permiten. Confirmar una reserva vencida o en un estado
+distinto de pendiente no está permitido. La API devuelve 404 si no existe,
+409 para conflictos de horario o de estado, y 422 si los datos son inválidos.
 
 ## Pruebas
 
-Desde `backend`:
+Las pruebas usan SQLite en memoria y no requieren Docker. Desde `backend`:
 
 ```bash
-pytest tests src/prestamos_recursos/contexts/reservas/tests
+source .venv/bin/activate
+DATABASE_URL=sqlite+pysqlite:///:memory: python -m pytest tests src/prestamos_recursos/contexts/reservas/tests
 ```
 
-La ruta del contexto se indica explícitamente porque la configuración general de
-pytest solo busca por defecto en `backend/tests`.
+La ruta del contexto se indica porque pytest busca por defecto en `backend/tests`.
 
 ## Pendiente
 
-Persistencia en PostgreSQL, autenticación y autorización, validación de usuarios
-y recursos con los otros módulos, reglas definitivas de prioridad y conversión
-a préstamo. Esta entrega es un avance funcional, no el módulo terminado.
+Autenticación y autorización, validar usuario y recurso con los otros contextos,
+reglas definitivas de prioridad e integrar la conversión a préstamo. La cola
+actual usa fecha de inicio como orden provisional.

@@ -1,17 +1,36 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 
-from prestamos_recursos.contexts.identidad_reputacion.presentation.autenticacion_controller import router as autenticacion_router
-from prestamos_recursos.contexts.catalogo.presentation.recurso_controller import router as recurso_router
-from prestamos_recursos.contexts.reservas.presentation.reserva_controller import router as reserva_router
-from prestamos_recursos.contexts.prestamos.presentation.prestamo_controller import router as prestamo_router
+from prestamos_recursos.contexts.catalogo.presentation.recurso_controller import (
+    router as recurso_router,
+)
+from prestamos_recursos.contexts.identidad_reputacion.presentation.autenticacion_controller import (
+    router as autenticacion_router,
+)
+from prestamos_recursos.contexts.prestamos.presentation.prestamo_controller import (
+    router as prestamo_router,
+)
+from prestamos_recursos.contexts.reservas.presentation.reserva_controller import (
+    router as reserva_router,
+)
+from prestamos_recursos.shared.database import Base, engine
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    Base.metadata.create_all(bind=engine)
+    yield
 
 app = FastAPI(
     title="Proyecto Interdisciplinar - Préstamo de Recursos",
     docs_url=None,
     swagger_ui_parameters={"docExpansion": "none", "defaultModelsExpandDepth": -1},
+    lifespan=lifespan,
 )
 
 

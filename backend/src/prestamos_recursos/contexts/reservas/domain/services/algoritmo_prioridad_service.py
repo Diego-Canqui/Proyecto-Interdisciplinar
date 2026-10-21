@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from prestamos_recursos.contexts.reservas.domain.entities.reserva import Reserva
 
@@ -19,6 +19,6 @@ class AlgoritmoPrioridadService:
         """Un valor menor tiene prioridad; conserva la precisión de microsegundos."""
         inicio = reserva.fecha_inicio
         if inicio.utcoffset() is None:
-            inicio = inicio.replace(tzinfo=timezone.utc)
-        diferencia = inicio - datetime(1970, 1, 1, tzinfo=timezone.utc)
+            inicio = inicio.replace(tzinfo=UTC)
+        diferencia = inicio - datetime(1970, 1, 1, tzinfo=UTC)
         return diferencia // timedelta(microseconds=1)

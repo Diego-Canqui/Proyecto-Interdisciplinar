@@ -1,30 +1,28 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import delete
 
-from prestamos_recursos.contexts.reservas.application.reserva_service import ReservaService
-from prestamos_recursos.contexts.reservas.infrastructure.repositories.memoria_reserva_repository import (
-    MemoriaReservaRepository,
+from prestamos_recursos.contexts.reservas.infrastructure.models.reserva_model import (
+    ReservaModel,
 )
-from prestamos_recursos.contexts.reservas.presentation.reserva_controller import obtener_servicio
 from prestamos_recursos.main import app
+from prestamos_recursos.shared.database import SessionLocal
 
 
 @pytest.fixture
 def cliente():
-    servicio = ReservaService(MemoriaReservaRepository())
-    app.dependency_overrides[obtener_servicio] = lambda: servicio
-    try:
-        with TestClient(app) as client:
-            yield client
-    finally:
-        app.dependency_overrides.pop(obtener_servicio, None)
+    with TestClient(app) as client:
+        with SessionLocal() as session:
+            session.execute(delete(ReservaModel))
+            session.commit()
+        yield client
 
 
 def datos_reserva(horas=2, recurso_id=None):
-    inicio = datetime.now(timezone.utc) + timedelta(hours=horas)
+    inicio = datetime.now(UTC) + timedelta(hours=horas)
     return {
         "usuario_id": str(uuid4()),
         "recurso_id": recurso_id or str(uuid4()),
@@ -47,6 +45,22 @@ def test_crear_consultar_y_cancelar(cliente):
     assert cancelada.json()["estado"] == "CANCELADA"
     assert cliente.get(ruta).json()["estado"] == "CANCELADA"
     assert cliente.patch(f"{ruta}/cancelar").status_code == 409
+
+
+def test_confirmar_y_listar_por_usuario(cliente):
+    datos = datos_reserva()
+    creada = cliente.post("/reservas", json=datos)
+    assert creada.status_code == 201
+
+    id_reserva = creada.json()["id"]
+    confirmada = cliente.patch(f"/reservas/{id_reserva}/confirmar")
+    assert confirmada.status_code == 200
+    assert confirmada.json()["estado"] == "CONFIRMADA"
+    assert cliente.patch(f"/reservas/{id_reserva}/confirmar").status_code == 409
+
+    listado = cliente.get(f"/reservas/usuario/{datos['usuario_id']}")
+    assert listado.status_code == 200
+    assert [reserva["id"] for reserva in listado.json()] == [id_reserva]
 
 
 def test_rechaza_cruce_y_permite_horarios_libres(cliente):

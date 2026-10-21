@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from prestamos_recursos.contexts.reservas.domain.enums.estado_reserva import EstadoReserva
@@ -48,6 +48,13 @@ class Reserva(BaseEntity):
             raise ValueError("la reserva no se puede cancelar en su estado actual")
         self.estado = EstadoReserva.CANCELADA
 
+    def confirmar(self) -> None:
+        if self.estado != EstadoReserva.PENDIENTE:
+            raise ValueError("solo una reserva pendiente puede confirmarse")
+        if not self.esta_vigente():
+            raise ValueError("no se puede confirmar una reserva vencida")
+        self.estado = EstadoReserva.CONFIRMADA
+
     def convertir_a_prestamo(self) -> None:
         if self.estado != EstadoReserva.CONFIRMADA:
             raise ValueError("solo una reserva confirmada puede convertirse en préstamo")
@@ -83,5 +90,5 @@ class Reserva(BaseEntity):
     @staticmethod
     def _a_utc(fecha: datetime) -> datetime:
         if fecha.tzinfo is None:
-            fecha = fecha.replace(tzinfo=timezone.utc)
-        return fecha.astimezone(timezone.utc)
+            fecha = fecha.replace(tzinfo=UTC)
+        return fecha.astimezone(UTC)
