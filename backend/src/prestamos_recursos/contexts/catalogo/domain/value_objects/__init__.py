@@ -1,0 +1,1 @@
+from prestamos_recursos.contexts.catalogo.domain.value_objects.ficha_tecnica import FichaTecnica

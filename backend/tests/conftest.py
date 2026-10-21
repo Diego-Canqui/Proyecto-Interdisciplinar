@@ -1,3 +1,6 @@
+import os
+
+os.environ["TESTING"] = "1"
 """Configuración compartida para todos los tests (unit, integration, e2e)."""
 
 import pytest

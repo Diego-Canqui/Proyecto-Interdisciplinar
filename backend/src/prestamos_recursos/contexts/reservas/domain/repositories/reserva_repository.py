@@ -11,6 +11,7 @@ class ReservaRepository(ABC):
 
     @abstractmethod
     def guardar(self, reserva: Reserva) -> None:
+        """Crea o actualiza una reserva por su identificador."""
         ...
 
     @abstractmethod
@@ -22,5 +23,11 @@ class ReservaRepository(ABC):
         ...
 
     @abstractmethod
+    def obtener_activas_por_recurso(self, id_recurso: UUID) -> list[Reserva]:
+        """Devuelve las reservas pendientes o confirmadas de un recurso."""
+        ...
+
+    @abstractmethod
     def obtener_cola_por_recurso(self, id_recurso: UUID) -> list[Reserva]:
+        """Devuelve las reservas pendientes; la prioridad se aplica en el servicio."""
         ...

@@ -1,0 +1,1 @@
+from prestamos_recursos.contexts.catalogo.domain.repositories.recurso_repository import RecursoRepository

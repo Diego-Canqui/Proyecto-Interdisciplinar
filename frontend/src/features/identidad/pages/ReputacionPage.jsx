@@ -39,15 +39,15 @@ export default function ReputacionPage() {
 
   if (cargando) {
     return (
-      <main style={{ maxWidth: "600px", margin: "2rem auto", padding: "1rem" }}>
+      <div style={{ maxWidth: "600px", margin: "2rem auto", padding: "1rem" }}>
         <p>Cargando perfil de reputación...</p>
-      </main>
+      </div>
     );
   }
 
   if (error) {
     return (
-      <main style={{ maxWidth: "600px", margin: "2rem auto", padding: "1rem" }}>
+      <div style={{ maxWidth: "600px", margin: "2rem auto", padding: "1rem" }}>
         <div style={{ color: "red" }} role="alert">
           {error}
         </div>
@@ -65,15 +65,15 @@ export default function ReputacionPage() {
         >
           Volver al inicio
         </button>
-      </main>
+      </div>
     );
   }
 
   if (!perfil) {
     return (
-      <main style={{ maxWidth: "600px", margin: "2rem auto", padding: "1rem" }}>
+      <div style={{ maxWidth: "600px", margin: "2rem auto", padding: "1rem" }}>
         <p>No se pudo cargar el perfil.</p>
-      </main>
+      </div>
     );
   }
 
@@ -110,7 +110,7 @@ export default function ReputacionPage() {
   };
 
   return (
-    <main style={{ maxWidth: "700px", margin: "2rem auto", padding: "1rem" }}>
+    <div style={{ maxWidth: "700px", margin: "2rem auto", padding: "1rem" }}>
       <h1>Mi Perfil de Reputación</h1>
 
       <div
@@ -241,6 +241,6 @@ export default function ReputacionPage() {
           </p>
         )}
       </section>
-    </main>
+    </div>
   );
 }

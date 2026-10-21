@@ -1,0 +1,1 @@
+from prestamos_recursos.contexts.catalogo.infrastructure.repositories.sql_recurso_repository import SqlRecursoRepository
