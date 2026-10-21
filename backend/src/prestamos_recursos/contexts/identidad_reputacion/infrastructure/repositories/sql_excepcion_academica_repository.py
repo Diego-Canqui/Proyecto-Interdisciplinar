@@ -48,6 +48,9 @@ class SqlExcepcionAcademicaRepository(ExcepcionAcademicaRepository):
             modelo.activa = excepcion_academica.activa
 
         self._session.flush()
+        if self._session.bind.dialect.name == "sqlite":
+            modelo.fecha_inicio = self._normalizar_fecha_sqlite(modelo.fecha_inicio)
+            modelo.fecha_fin = self._normalizar_fecha_sqlite(modelo.fecha_fin)
 
     def obtener_por_id(self, id: UUID) -> ExcepcionAcademica | None:
         """Obtiene una excepción académica por su ID."""
@@ -94,7 +97,13 @@ class SqlExcepcionAcademicaRepository(ExcepcionAcademicaRepository):
             id=modelo.id,
             usuario_id=modelo.usuario_id,
             motivo=modelo.motivo,
-            fecha_inicio=modelo.fecha_inicio,
-            fecha_fin=modelo.fecha_fin,
+            fecha_inicio=self._normalizar_fecha_sqlite(modelo.fecha_inicio),
+            fecha_fin=self._normalizar_fecha_sqlite(modelo.fecha_fin),
             activa=modelo.activa,
         )
+
+    @staticmethod
+    def _normalizar_fecha_sqlite(fecha: datetime) -> datetime:
+        if fecha.tzinfo is None:
+            return fecha.replace(tzinfo=UTC)
+        return fecha

@@ -1,5 +1,5 @@
-from collections.abc import Iterator
 import os
+from collections.abc import Iterator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -14,6 +14,13 @@ if os.getenv("TESTING") == "1":
         DATABASE_URL,
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
+        execution_options={
+            "schema_translate_map": {
+                "identidad_reputacion": None,
+                "prestamos": None,
+                "reservas": None,
+            }
+        },
     )
 else:
     engine = create_engine(settings.database_url, pool_pre_ping=True)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import String, text
+from sqlalchemy import JSON, String, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -29,7 +29,9 @@ class UsuarioModel(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     estado: Mapped[bool] = mapped_column(default=True, nullable=False)
     roles: Mapped[list[str]] = mapped_column(
-        ARRAY(String(30)), default=lambda: ["ESTUDIANTE"], nullable=False
+        ARRAY(String(30)).with_variant(JSON(), "sqlite"),
+        default=lambda: ["ESTUDIANTE"],
+        nullable=False,
     )
 
     def to_entity(self) -> Usuario:
