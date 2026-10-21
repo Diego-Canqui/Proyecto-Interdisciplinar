@@ -13,7 +13,8 @@ router = APIRouter(prefix="/prestamos", tags=["Préstamos"])
 
 @router.post("/{id_prestamo}/devolucion")
 def registrar_devolucion(id_prestamo: UUID):
-    raise HTTPException(status_code=501, detail="Pendiente de implementar")
+        service.procesar_devolucion(id_prestamo)
+    return {"detalle": "Devolución procesada"}
 
 
 @router.get("/usuarios/{id_usuario}/historial", response_model=list[PrestamoDTO])
