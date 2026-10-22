@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_garantia import EstadoGarantia
@@ -66,6 +67,14 @@ class FakeGarantiaRepository:
         )
 
 
+class FakeRecursoRepository:
+    def __init__(self):
+        self.estado = EstadoRecurso.EN_USO
+
+    def actualizar_estado(self, id_recurso, estado):
+        self.estado = estado
+
+
 @pytest.fixture(autouse=True)
 def cleanup_overrides():
     yield
@@ -115,14 +124,6 @@ def test_consultar_historial_con_prestamos():
 
 
 @pytest.mark.e2e
-def test_registrar_devolucion_retorna_501_pendiente():
-    prestamo_id = uuid4()
-    response = client.post(f"/prestamos/{prestamo_id}/devolucion")
-    assert response.status_code == 501
-    assert response.json()["detail"] == "Pendiente de implementar"
-
-
-@pytest.mark.e2e
 def test_ciclo_entrega_endpoints_completo():
     prestamo = Prestamo(
         reserva_id=uuid4(),
@@ -135,10 +136,12 @@ def test_ciclo_entrega_endpoints_completo():
     prestamo_repository = FakePrestamoRepository([prestamo])
     checklist_repository = FakeChecklistRepository()
     garantia_repository = FakeGarantiaRepository()
+    recurso_repository = FakeRecursoRepository()
     service = PrestamoService(
         prestamo_repository=prestamo_repository,
         checklist_repository=checklist_repository,
         garantia_repository=garantia_repository,
+        recurso_repository=recurso_repository,
     )
     app.dependency_overrides[get_prestamo_service] = lambda: service
 
@@ -170,4 +173,32 @@ def test_ciclo_entrega_endpoints_completo():
     garantia = garantia_repository.obtener_por_prestamo(prestamo.id)
     assert checklist is not None and checklist.completo
     assert garantia is not None and garantia.estado == EstadoGarantia.REGISTRADA
+
+    devolucion = client.post(f"/prestamos/{prestamo.id}/devolucion")
+    assert devolucion.status_code == 200
+    assert devolucion.json() == {
+        "detalle": "Devolución registrada",
+        "estado": EstadoPrestamo.DEVUELTO.value,
+        "dias_retraso": 0,
+    }
+    assert prestamo.estado == EstadoPrestamo.DEVUELTO
+    assert recurso_repository.estado == EstadoRecurso.DISPONIBLE
+    segunda_devolucion = client.post(f"/prestamos/{prestamo.id}/devolucion")
+    assert segunda_devolucion.status_code == 409
+    assert segunda_devolucion.json()["detail"] == "El préstamo ya fue devuelto"
+
+
+@pytest.mark.e2e
+def test_devolucion_prestamo_inexistente_retorna_404():
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    response = client.post(f"/prestamos/{uuid4()}/devolucion")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Préstamo no encontrado"
 

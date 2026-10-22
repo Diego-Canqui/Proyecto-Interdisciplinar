@@ -119,6 +119,33 @@ def test_consultar_historial_vacio_si_usuario_no_tiene_prestamos():
     assert historial == []
 
 
+def test_procesar_devolucion_puntual_retorna_cero_y_premia_usuario():
+    usuario_id = uuid4()
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_id,
+        fecha_inicio=datetime(2026, 10, 20, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 25, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    premiados = []
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+        reputacion_service=SimpleNamespace(
+            premiar_devolucion_puntual=lambda id_usuario: premiados.append(id_usuario)
+        ),
+    )
+
+    dias_retraso = service.procesar_devolucion(prestamo.id)
+
+    assert dias_retraso == 0
+    assert prestamo.estado == EstadoPrestamo.DEVUELTO
+    assert premiados == [usuario_id]
+
+
 def test_ciclo_entrega_completo_confirma_checklist_y_premia_puntualidad():
     usuario_id = uuid4()
     prestamo = Prestamo(

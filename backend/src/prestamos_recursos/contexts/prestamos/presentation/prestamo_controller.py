@@ -111,11 +111,17 @@ def registrar_devolucion(
     id_prestamo: UUID,
     service: PrestamoService = Depends(get_prestamo_service),
 ) -> dict:
-    """Endpoint placeholder for processing a loan return.
-
-    Currently not implemented; returns HTTP 501 to signal pending implementation.
-    """
-    raise HTTPException(status_code=501, detail="Pendiente de implementar")
+    """Registra la devolución del préstamo y devuelve los días de retraso."""
+    try:
+        dias_retraso = service.procesar_devolucion(id_prestamo)
+    except ValueError as exc:
+        status_code = 404 if str(exc) == "Préstamo no encontrado" else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {
+        "detalle": "Devolución registrada",
+        "estado": "DEVUELTO",
+        "dias_retraso": dias_retraso,
+    }
 
 
 @router.get("/usuarios/{id_usuario}/historial", response_model=list[PrestamoDTO])

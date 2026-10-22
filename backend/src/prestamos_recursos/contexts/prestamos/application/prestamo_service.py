@@ -192,7 +192,7 @@ class PrestamoService:
             raise ValueError("El préstamo no está activo")
         return prestamo
 
-    def procesar_devolucion(self, id_prestamo: UUID) -> None:
+    def procesar_devolucion(self, id_prestamo: UUID) -> int:
         """Procesa la devolución de un préstamo y actualiza la reputación.
 
         - Obtiene el préstamo.
@@ -207,9 +207,13 @@ class PrestamoService:
         dias_retraso = prestamo.devolver()
         # Persistir cambios del préstamo
         self._prestamo_repository.guardar(prestamo)
+        if self._recurso_repository is not None:
+            self._recurso_repository.actualizar_estado(
+                prestamo.recurso_id, EstadoRecurso.DISPONIBLE
+            )
 
         if self._reputacion_service is None:
-            return
+            return dias_retraso
 
         if dias_retraso == 0:
             self._reputacion_service.premiar_devolucion_puntual(prestamo.usuario_id)
@@ -220,6 +224,7 @@ class PrestamoService:
                 motivo="Devolución tardía",
                 dias_retardo=dias_retraso,
             )
+        return dias_retraso
 
     def renovar_prestamo(self, id_prestamo: UUID) -> bool:
         """Renueva un préstamo activo extendiendo su fecha de fin.
