@@ -3,6 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
+from prestamos_recursos.contexts.catalogo.domain.repositories.recurso_repository import (
+    RecursoRepository,
+)
 from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
     ReputacionService,
 )
@@ -38,15 +42,43 @@ class PrestamoService:
         checklist_repository: ChecklistRepository,
         garantia_repository: GarantiaRepository,
         reputacion_service: ReputacionService | None = None,
+        recurso_repository: RecursoRepository | None = None,
     ) -> None:
         self._prestamo_repository = prestamo_repository
         self._checklist_repository = checklist_repository
         self._garantia_repository = garantia_repository
         self._reputacion_service = reputacion_service
+        self._recurso_repository = recurso_repository
 
-    def solicitar_prestamo(self, id_usuario: UUID, id_recurso: UUID) -> bool:
-        """Lógica de negocio para solicitar un préstamo (pendiente de implementar)."""
-        raise NotImplementedError
+    def solicitar_prestamo(
+        self,
+        id_reserva: UUID,
+        id_usuario: UUID,
+        id_recurso: UUID,
+        fecha_inicio: datetime,
+        fecha_fin: datetime,
+    ) -> bool:
+        """Crea un préstamo desde una reserva tras validar el recurso del catálogo."""
+        if self._recurso_repository is None:
+            raise RuntimeError("El repositorio de catálogo no está configurado")
+
+        recurso = self._recurso_repository.obtener_por_id(id_recurso)
+        if recurso is None:
+            raise ValueError("Recurso no encontrado")
+        if recurso.estado != EstadoRecurso.DISPONIBLE:
+            raise ValueError("Recurso no disponible")
+
+        prestamo = Prestamo(
+            reserva_id=id_reserva,
+            usuario_id=id_usuario,
+            recurso_id=id_recurso,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+            estado=EstadoPrestamo.ACTIVO,
+        )
+        self._prestamo_repository.guardar(prestamo)
+        self._recurso_repository.actualizar_estado(id_recurso, EstadoRecurso.EN_USO)
+        return True
 
     def crear_desde_reserva(
         self,
@@ -56,18 +88,14 @@ class PrestamoService:
         fecha_inicio: datetime,
         fecha_fin: datetime,
     ) -> bool:
-        """Crea un préstamo activo a partir de una reserva confirmada."""
-        self._prestamo_repository.guardar(
-            Prestamo(
-                reserva_id=id_reserva,
-                usuario_id=id_usuario,
-                recurso_id=id_recurso,
-                fecha_inicio=fecha_inicio,
-                fecha_fin=fecha_fin,
-                estado=EstadoPrestamo.ACTIVO,
-            )
+        """Compatibilidad: crea un préstamo desde una reserva confirmada."""
+        return self.solicitar_prestamo(
+            id_reserva=id_reserva,
+            id_usuario=id_usuario,
+            id_recurso=id_recurso,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
         )
-        return True
 
     def iniciar_entrega(
         self,

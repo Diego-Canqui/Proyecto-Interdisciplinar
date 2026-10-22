@@ -73,7 +73,7 @@ class ReservaService:
         if reserva is None or reserva.estado != EstadoReserva.CONFIRMADA:
             return False
 
-        creado = self._prestamo_service.crear_desde_reserva(
+        creado = self._prestamo_service.solicitar_prestamo(
             id_reserva=reserva.id,
             id_usuario=reserva.usuario_id,
             id_recurso=reserva.recurso_id,

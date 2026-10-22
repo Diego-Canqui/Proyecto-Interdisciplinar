@@ -3,6 +3,10 @@
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from prestamos_recursos.contexts.catalogo.infrastructure.repositories import (
+    SqlRecursoRepository,
+)
+
 # Servicios y repositorios de reputación
 from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
     ReputacionService,
@@ -43,4 +47,5 @@ def get_prestamo_service(session: Session = Depends(get_session)) -> PrestamoSer
         checklist_repository=SqlChecklistRepository(session),
         garantia_repository=SqlGarantiaRepository(session),
         reputacion_service=reputacion_service,
+        recurso_repository=SqlRecursoRepository(session),
     )
