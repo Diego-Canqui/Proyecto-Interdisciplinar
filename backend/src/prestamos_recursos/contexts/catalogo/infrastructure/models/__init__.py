@@ -1,0 +1,1 @@
+from prestamos_recursos.contexts.catalogo.infrastructure.models.recurso_model import RecursoModel
