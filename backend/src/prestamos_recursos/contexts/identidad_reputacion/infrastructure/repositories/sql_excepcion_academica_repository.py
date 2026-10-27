@@ -77,6 +77,22 @@ class SqlExcepcionAcademicaRepository(ExcepcionAcademicaRepository):
         modelos = self._session.execute(stmt).scalars().all()
         return [self._modelo_a_excepcion(m) for m in modelos]
 
+    def obtener_por_usuario(self, usuario_id: UUID) -> list[ExcepcionAcademica]:
+        """
+        Obtiene todas las excepciones académicas de un usuario.
+
+        Incluye activas, anuladas, vencidas y programadas (sin filtro de vigencia),
+        ordenadas por fecha de inicio descendente. Es una lectura: no hace flush ni
+        commit (D13).
+        """
+        stmt = (
+            select(ExcepcionAcademicaModel)
+            .where(ExcepcionAcademicaModel.usuario_id == usuario_id)
+            .order_by(ExcepcionAcademicaModel.fecha_inicio.desc())
+        )
+        modelos = self._session.execute(stmt).scalars().all()
+        return [self._modelo_a_excepcion(m) for m in modelos]
+
     def _excepcion_a_modelo(self, excepcion: ExcepcionAcademica) -> ExcepcionAcademicaModel:
         """Convierte entidad de dominio a modelo ORM."""
         return ExcepcionAcademicaModel(
