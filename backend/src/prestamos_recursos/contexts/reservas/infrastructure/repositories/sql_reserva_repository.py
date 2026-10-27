@@ -49,6 +49,13 @@ class SqlReservaRepository(ReservaRepository):
         )
         return [self._a_entidad(modelo) for modelo in self._session.scalars(consulta)]
 
+    def obtener_todas(self) -> list[Reserva]:
+        consulta = (
+            select(ReservaModel)
+            .order_by(ReservaModel.fecha_inicio, ReservaModel.id)
+        )
+        return [self._a_entidad(modelo) for modelo in self._session.scalars(consulta)]
+
     def obtener_activas_por_recurso(self, id_recurso: UUID) -> list[Reserva]:
         consulta = select(ReservaModel).where(
             ReservaModel.recurso_id == id_recurso,

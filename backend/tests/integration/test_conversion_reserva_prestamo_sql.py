@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -123,3 +123,50 @@ def test_conversion_no_persiste_prestamo_si_reserva_no_esta_confirmada():
 
     assert session.query(PrestamoModel).count() == 0
     assert SqlReservaRepository(session).obtener_por_id(reserva_id).estado == EstadoReserva.PENDIENTE
+
+
+def test_obtener_todas_ordena_por_fecha_inicio_e_id():
+    session = make_session()
+    repo = SqlReservaRepository(session)
+    usuario1_id = uuid4()
+    usuario2_id = uuid4()
+    recurso_id = uuid4()
+
+    id_menor = UUID("00000000-0000-0000-0000-000000000001")
+    id_mayor = UUID("00000000-0000-0000-0000-000000000002")
+    fecha_temprana = datetime(2026, 10, 5, tzinfo=UTC)
+    fecha_tardia = datetime(2026, 10, 8, tzinfo=UTC)
+
+    # Insertamos desordenado
+    r1 = ReservaModel(
+        id=id_mayor,
+        usuario_id=usuario1_id,
+        recurso_id=recurso_id,
+        fecha_inicio=fecha_tardia,
+        fecha_fin=datetime(2026, 10, 9, tzinfo=UTC),
+        estado=EstadoReserva.CONFIRMADA,
+    )
+    r2 = ReservaModel(
+        id=uuid4(),
+        usuario_id=usuario2_id,
+        recurso_id=recurso_id,
+        fecha_inicio=fecha_temprana,
+        fecha_fin=datetime(2026, 10, 6, tzinfo=UTC),
+        estado=EstadoReserva.PENDIENTE,
+    )
+    r3 = ReservaModel(
+        id=id_menor,
+        usuario_id=usuario1_id,
+        recurso_id=recurso_id,
+        fecha_inicio=fecha_tardia,
+        fecha_fin=datetime(2026, 10, 10, tzinfo=UTC),
+        estado=EstadoReserva.CANCELADA,
+    )
+    session.add_all([r1, r2, r3])
+    session.commit()
+
+    resultado = repo.obtener_todas()
+
+    assert len(resultado) == 3
+    assert [r.id for r in resultado] == [r2.id, r3.id, r1.id]
+    assert {r.usuario_id for r in resultado} == {usuario1_id, usuario2_id}

@@ -5,20 +5,28 @@ from uuid import uuid4
 from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
+from prestamos_recursos.contexts.reservas.application.dto.reserva_dto import ReservaDTO
 from prestamos_recursos.contexts.reservas.application.reserva_service import ReservaService
 from prestamos_recursos.contexts.reservas.domain.entities.reserva import Reserva
 from prestamos_recursos.contexts.reservas.domain.enums.estado_reserva import EstadoReserva
 
 
 class FakeReservaRepository:
-    def __init__(self, reserva):
+    def __init__(self, reserva=None, reservas=None):
         self.reserva = reserva
+        self.reservas = list(reservas) if reservas is not None else ([reserva] if reserva else [])
         self.saved = []
 
     def obtener_por_id(self, id_reserva):
+        for r in self.reservas:
+            if r.id == id_reserva:
+                return r
         if self.reserva and self.reserva.id == id_reserva:
             return self.reserva
         return None
+
+    def obtener_todas(self):
+        return list(self.reservas)
 
     def guardar(self, reserva):
         self.saved.append(reserva)
@@ -140,3 +148,31 @@ def test_convertir_reserva_rechaza_recurso_inexistente():
 
     assert prestamo_repository.saved == []
     assert reserva.estado == EstadoReserva.CONFIRMADA
+
+
+def test_obtener_todas_devuelve_reservas_de_distintos_usuarios():
+    u1 = uuid4()
+    u2 = uuid4()
+    r1 = Reserva(
+        usuario_id=u1,
+        recurso_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 6, tzinfo=timezone.utc),
+        fecha_fin=datetime(2026, 10, 7, tzinfo=timezone.utc),
+        estado=EstadoReserva.CONFIRMADA,
+    )
+    r2 = Reserva(
+        usuario_id=u2,
+        recurso_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 8, tzinfo=timezone.utc),
+        fecha_fin=datetime(2026, 10, 9, tzinfo=timezone.utc),
+        estado=EstadoReserva.PENDIENTE,
+    )
+    repo = FakeReservaRepository(reservas=[r1, r2])
+    service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()))
+
+    resultado = service.obtener_todas()
+
+    assert len(resultado) == 2
+    assert all(isinstance(dto, ReservaDTO) for dto in resultado)
+    assert {dto.id for dto in resultado} == {r1.id, r2.id}
+    assert {dto.usuario_id for dto in resultado} == {u1, u2}
