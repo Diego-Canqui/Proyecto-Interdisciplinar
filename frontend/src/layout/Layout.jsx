@@ -1,13 +1,17 @@
 import { NavLink, Link, Outlet, useNavigate } from "react-router-dom";
 import { logout } from "../features/identidad/api.js";
 
-// Mapa rol → enlace = tabla de la guía §6 (D1). «Usuarios» solo para administración.
+// Mapa rol → enlace = tabla de la guía §6 (D1). «Usuarios» y «Gestión de reputación»
+// solo para los roles de gestión.
+const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
+
 const ENLACES = [
   { a: "/recursos", texto: "Recursos" },
   { a: "/reservas", texto: "Reservas" },
   { a: "/historial", texto: "Historial" },
   { a: "/reputacion", texto: "Reputación" },
-  { a: "/usuarios", texto: "Usuarios", soloAdministrador: true },
+  { a: "/usuarios", texto: "Usuarios", soloGestion: true },
+  { a: "/gestion-reputacion", texto: "Gestión de reputación", soloGestion: true },
 ];
 
 /**
@@ -39,8 +43,8 @@ export default function Layout() {
   const navigate = useNavigate();
   const roles = leerRoles(); // única lectura del token (P2)
   const haySesion = roles.length > 0; // RF-03
-  const esAdministrador = roles.includes("ADMINISTRADOR_SISTEMA");
-  const enlaces = ENLACES.filter((e) => !e.soloAdministrador || esAdministrador); // RF-02
+  const esGestion = roles.some((rol) => ROLES_GESTION.includes(rol));
+  const enlaces = ENLACES.filter((e) => !e.soloGestion || esGestion); // RF-02
 
   const cerrarSesion = async () => {
     try {

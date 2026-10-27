@@ -138,3 +138,13 @@ export async function anularExcepcion(excepcionId) {
   const response = await apiClient.post(`/reputacion/excepciones/${excepcionId}/anular`);
   return response;
 }
+
+/**
+ * Obtiene la ficha de reputación de un tercero (solo roles de gestión, RF-04).
+ * @param {string} usuarioId - UUID del usuario consultado
+ * @returns {Promise<object>} PerfilGestionDTO con puntaje, nivel, sanciones y excepciones
+ */
+export async function obtenerPerfilGestion(usuarioId) {
+  const response = await apiClient.get(`/reputacion/usuarios/${usuarioId}/perfil`);
+  return response;
+}
