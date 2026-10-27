@@ -4,6 +4,11 @@ from uuid import uuid4
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
+from prestamos_recursos.contexts.catalogo.infrastructure.models.recurso_model import RecursoModel
+from prestamos_recursos.contexts.catalogo.infrastructure.repositories.sql_recurso_repository import (
+    SqlRecursoRepository,
+)
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
 from prestamos_recursos.contexts.prestamos.infrastructure.models.prestamo_model import PrestamoModel
@@ -16,7 +21,6 @@ from prestamos_recursos.contexts.reservas.infrastructure.models.reserva_model im
 from prestamos_recursos.contexts.reservas.infrastructure.repositories.sql_reserva_repository import (
     SqlReservaRepository,
 )
-from prestamos_recursos.shared.database import Base
 
 
 def make_session() -> Session:
@@ -26,6 +30,7 @@ def make_session() -> Session:
         connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS prestamos")
         ReservaModel.__table__.create(connection)
         PrestamoModel.__table__.create(connection)
+        RecursoModel.__table__.create(connection)
     return Session(engine, expire_on_commit=False)
 
 
@@ -36,6 +41,7 @@ def make_service(session: Session) -> ReservaService:
             prestamo_repository=SqlPrestamoRepository(session),
             checklist_repository=None,
             garantia_repository=None,
+            recurso_repository=SqlRecursoRepository(session),
         ),
     )
 
@@ -55,6 +61,21 @@ def test_conversion_persiste_prestamo_y_reserva_en_una_transaccion():
             fecha_inicio=fecha_inicio,
             fecha_fin=fecha_fin,
             estado=EstadoReserva.CONFIRMADA,
+        )
+    )
+    session.add(
+        RecursoModel(
+            id=recurso_id,
+            nombre="Proyector",
+            descripcion="Proyector para aula",
+            categoria="Multimedia",
+            estado=EstadoRecurso.DISPONIBLE,
+            marca="Epson",
+            modelo="EB-X",
+            numero_serie=f"SER-{recurso_id}",
+            color="Blanco",
+            estado_fisico="Bueno",
+            foto_url="https://example.test/proyector.jpg",
         )
     )
     session.commit()
@@ -77,6 +98,9 @@ def test_conversion_persiste_prestamo_y_reserva_en_una_transaccion():
     assert session.query(PrestamoModel).count() == 1
     assert reserva is not None
     assert reserva.estado == EstadoReserva.CONVERTIDA
+    recurso = SqlRecursoRepository(session).obtener_por_id(recurso_id)
+    assert recurso is not None
+    assert recurso.estado == EstadoRecurso.EN_USO
 
 
 def test_conversion_no_persiste_prestamo_si_reserva_no_esta_confirmada():

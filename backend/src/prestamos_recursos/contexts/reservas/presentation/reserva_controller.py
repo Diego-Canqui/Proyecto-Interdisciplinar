@@ -6,6 +6,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from prestamos_recursos.contexts.catalogo.infrastructure.repositories import (
+    SqlRecursoRepository,
+)
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
     UsuarioDTO,
 )
@@ -40,6 +43,7 @@ def obtener_servicio(sesion: Annotated[Session, Depends(get_session)]) -> Reserv
         SqlPrestamoRepository(sesion),
         SqlChecklistRepository(sesion),
         SqlGarantiaRepository(sesion),
+        recurso_repository=SqlRecursoRepository(sesion),
     )
     return ReservaService(SqlReservaRepository(sesion), prestamos)
 
@@ -129,6 +133,27 @@ def confirmar_reserva(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/{id_reserva}/prestamo", status_code=status.HTTP_201_CREATED)
+def solicitar_prestamo(
+    id_reserva: UUID,
+    servicio: ServicioReservas,
+    usuario: UsuarioAutenticado,
+) -> dict[str, str]:
+    """Convierte una reserva confirmada en préstamo si el recurso está disponible."""
+    _reserva_del_usuario(id_reserva, servicio, usuario)
+    try:
+        creado = servicio.convertir_a_prestamo(id_reserva)
+    except ValueError as error:
+        codigo = 404 if str(error) == "Recurso no encontrado" else 409
+        raise HTTPException(status_code=codigo, detail=str(error)) from error
+    if not creado:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="la reserva debe estar confirmada para solicitar el préstamo",
+        )
+    return {"detalle": "Préstamo creado desde la reserva"}
 
 
 @router.patch("/{id_reserva}/cancelar", response_model=ReservaDTO)

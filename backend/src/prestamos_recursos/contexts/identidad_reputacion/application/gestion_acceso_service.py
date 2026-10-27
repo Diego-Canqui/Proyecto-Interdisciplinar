@@ -24,13 +24,18 @@ class GestionAccesoService:
         usuario_id = self._autenticacion_service.validar_token(token)
         return usuario_id is not None
 
-    def verificar_permisos(self, id_usuario: UUID, rol: RolUsuario) -> bool:
+    def verificar_permisos(self, id_usuario: UUID | str, rol: RolUsuario) -> bool:
         """
         Verifica si un usuario tiene un rol específico.
 
         Busca el usuario por ID y comprueba si el rol está en su lista de roles.
         """
-        usuario = self._usuario_repo.obtener_por_id(id_usuario)
+        try:
+            usuario_id = UUID(str(id_usuario))
+        except ValueError:
+            return False
+
+        usuario = self._usuario_repo.obtener_por_id(usuario_id)
         if usuario is None:
             return False
         return rol in usuario.roles

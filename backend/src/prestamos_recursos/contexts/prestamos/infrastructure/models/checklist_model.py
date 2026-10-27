@@ -1,7 +1,8 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Enum as SAEnum, Text
+from sqlalchemy import JSON, DateTime, Text
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,5 +21,5 @@ class ChecklistModel(Base):
     tipo: Mapped[TipoChecklist] = mapped_column(SAEnum(TipoChecklist, native_enum=False, length=30))
     fecha_inspeccion: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     observaciones: Mapped[str] = mapped_column(Text)
-    fotos_urls: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    fotos_urls: Mapped[list[str]] = mapped_column(ARRAY(Text).with_variant(JSON(), "sqlite"))
     completo: Mapped[bool] = mapped_column()

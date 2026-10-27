@@ -190,6 +190,10 @@ class ReputacionService:
 
         self._perfil_reputacion_repository.guardar(perfil)
 
+    def premiar_entrega_puntual(self, usuario_id: UUID) -> None:
+        """Aplica la bonificación de puntualidad definida para entregas a tiempo."""
+        self.premiar_devolucion_puntual(usuario_id)
+
     def ejecutar_amnistia_mensual(self) -> int:
         """
         Ejecuta la amnistía mensual y devuelve cuántos perfiles premió (RF-11, RF-13).

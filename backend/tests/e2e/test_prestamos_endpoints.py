@@ -5,9 +5,13 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
+from prestamos_recursos.contexts.prestamos.domain.enums.estado_garantia import EstadoGarantia
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
+from prestamos_recursos.contexts.prestamos.domain.enums.tipo_checklist import TipoChecklist
+from prestamos_recursos.contexts.prestamos.domain.enums.tipo_garantia import TipoGarantia
 from prestamos_recursos.contexts.prestamos.presentation.dependencies import get_prestamo_service
 from prestamos_recursos.main import app
 
@@ -18,8 +22,57 @@ class FakePrestamoRepository:
     def __init__(self, prestamos: list[Prestamo] | None = None) -> None:
         self.prestamos = prestamos or []
 
+    def guardar(self, prestamo):
+        if prestamo not in self.prestamos:
+            self.prestamos.append(prestamo)
+
     def obtener_por_usuario(self, id_usuario):
         return [p for p in self.prestamos if p.usuario_id == id_usuario]
+
+    def obtener_por_id(self, id_prestamo):
+        return next((p for p in self.prestamos if p.id == id_prestamo), None)
+
+
+class FakeChecklistRepository:
+    def __init__(self):
+        self.checklists = []
+
+    def guardar(self, checklist):
+        if checklist not in self.checklists:
+            self.checklists.append(checklist)
+
+    def obtener_por_prestamo_y_tipo(self, prestamo_id, tipo):
+        return next(
+            (
+                checklist
+                for checklist in self.checklists
+                if checklist.prestamo_id == prestamo_id and checklist.tipo == tipo
+            ),
+            None,
+        )
+
+
+class FakeGarantiaRepository:
+    def __init__(self):
+        self.garantias = []
+
+    def guardar(self, garantia):
+        if garantia not in self.garantias:
+            self.garantias.append(garantia)
+
+    def obtener_por_prestamo(self, prestamo_id):
+        return next(
+            (garantia for garantia in self.garantias if garantia.prestamo_id == prestamo_id),
+            None,
+        )
+
+
+class FakeRecursoRepository:
+    def __init__(self):
+        self.estado = EstadoRecurso.EN_USO
+
+    def actualizar_estado(self, id_recurso, estado):
+        self.estado = estado
 
 
 @pytest.fixture(autouse=True)
@@ -71,9 +124,81 @@ def test_consultar_historial_con_prestamos():
 
 
 @pytest.mark.e2e
-def test_registrar_devolucion_retorna_501_pendiente():
-    prestamo_id = uuid4()
-    response = client.post(f"/prestamos/{prestamo_id}/devolucion")
-    assert response.status_code == 501
-    assert response.json()["detail"] == "Pendiente de implementar"
+def test_ciclo_entrega_endpoints_completo():
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime.now(UTC),
+        fecha_fin=datetime(2026, 10, 30, tzinfo=UTC),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    prestamo_repository = FakePrestamoRepository([prestamo])
+    checklist_repository = FakeChecklistRepository()
+    garantia_repository = FakeGarantiaRepository()
+    recurso_repository = FakeRecursoRepository()
+    service = PrestamoService(
+        prestamo_repository=prestamo_repository,
+        checklist_repository=checklist_repository,
+        garantia_repository=garantia_repository,
+        recurso_repository=recurso_repository,
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    base = f"/prestamos/{prestamo.id}/entrega"
+    iniciar = client.post(
+        f"{base}/iniciar",
+        json={
+            "tipo_garantia": TipoGarantia.CARNET_UNIVERSITARIO.value,
+            "compromiso_contenido": "Me responsabilizo",
+            "compromiso_firma_url": "https://example.test/firma",
+            "compromiso_testigo": "Encargado",
+        },
+    )
+    assert iniciar.status_code == 200
+
+    agregar_item = client.post(
+        f"{base}/checklist/items",
+        json={"observaciones": "Equipo en buen estado", "fotos_urls": ["foto.jpg"]},
+    )
+    assert agregar_item.status_code == 200
+    assert client.post(f"{base}/confirmar").status_code == 200
+
+    finalizar = client.post(f"{base}/finalizar")
+    assert finalizar.status_code == 200
+    assert finalizar.json()["estado"] == EstadoPrestamo.ENTREGADO.value
+    checklist = checklist_repository.obtener_por_prestamo_y_tipo(
+        prestamo.id, TipoChecklist.ESTADO_INICIAL
+    )
+    garantia = garantia_repository.obtener_por_prestamo(prestamo.id)
+    assert checklist is not None and checklist.completo
+    assert garantia is not None and garantia.estado == EstadoGarantia.REGISTRADA
+
+    devolucion = client.post(f"/prestamos/{prestamo.id}/devolucion")
+    assert devolucion.status_code == 200
+    assert devolucion.json() == {
+        "detalle": "Devolución registrada",
+        "estado": EstadoPrestamo.DEVUELTO.value,
+        "dias_retraso": 0,
+    }
+    assert prestamo.estado == EstadoPrestamo.DEVUELTO
+    assert recurso_repository.estado == EstadoRecurso.DISPONIBLE
+    segunda_devolucion = client.post(f"/prestamos/{prestamo.id}/devolucion")
+    assert segunda_devolucion.status_code == 409
+    assert segunda_devolucion.json()["detail"] == "El préstamo ya fue devuelto"
+
+
+@pytest.mark.e2e
+def test_devolucion_prestamo_inexistente_retorna_404():
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    response = client.post(f"/prestamos/{uuid4()}/devolucion")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Préstamo no encontrado"
 

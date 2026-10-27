@@ -16,3 +16,7 @@ class GarantiaRepository(ABC):
     @abstractmethod
     def obtener_por_id(self, id: UUID) -> Garantia | None:
         ...
+
+    @abstractmethod
+    def obtener_por_prestamo(self, prestamo_id: UUID) -> Garantia | None:
+        ...

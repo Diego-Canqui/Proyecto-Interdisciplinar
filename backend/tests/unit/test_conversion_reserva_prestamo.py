@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
 from prestamos_recursos.contexts.reservas.application.reserva_service import ReservaService
@@ -31,6 +32,17 @@ class FakePrestamoRepository:
         self.saved.append(prestamo)
 
 
+class FakeRecursoRepository:
+    def __init__(self, estado=EstadoRecurso.DISPONIBLE, existe=True):
+        self.recurso = SimpleNamespace(estado=estado) if existe else None
+
+    def obtener_por_id(self, id_recurso):
+        return self.recurso
+
+    def actualizar_estado(self, id_recurso, estado):
+        self.recurso.estado = estado
+
+
 def make_reserva(estado=EstadoReserva.CONFIRMADA):
     return Reserva(
         usuario_id=uuid4(),
@@ -41,11 +53,12 @@ def make_reserva(estado=EstadoReserva.CONFIRMADA):
     )
 
 
-def make_prestamo_service(prestamo_repository):
+def make_prestamo_service(prestamo_repository, recurso_repository=None):
     return PrestamoService(
         prestamo_repository=prestamo_repository,
         checklist_repository=SimpleNamespace(),
         garantia_repository=SimpleNamespace(),
+        recurso_repository=recurso_repository or FakeRecursoRepository(),
     )
 
 
@@ -53,9 +66,10 @@ def test_convertir_reserva_confirmada_crea_prestamo_activo():
     reserva = make_reserva()
     reserva_repository = FakeReservaRepository(reserva)
     prestamo_repository = FakePrestamoRepository()
+    recurso_repository = FakeRecursoRepository()
     service = ReservaService(
         reserva_repository,
-        make_prestamo_service(prestamo_repository),
+        make_prestamo_service(prestamo_repository, recurso_repository),
     )
 
     assert service.convertir_a_prestamo(reserva.id) is True
@@ -69,6 +83,7 @@ def test_convertir_reserva_confirmada_crea_prestamo_activo():
     assert prestamo.estado == EstadoPrestamo.ACTIVO
     assert reserva.estado == EstadoReserva.CONVERTIDA
     assert reserva_repository.saved == [reserva]
+    assert recurso_repository.recurso.estado == EstadoRecurso.EN_USO
 
 
 def test_convertir_reserva_no_confirmada_no_crea_prestamo():
@@ -83,3 +98,45 @@ def test_convertir_reserva_no_confirmada_no_crea_prestamo():
     assert service.convertir_a_prestamo(reserva.id) is False
     assert prestamo_repository.saved == []
     assert reserva_repository.saved == []
+
+
+def test_convertir_reserva_rechaza_recurso_no_disponible():
+    reserva = make_reserva()
+    reserva_repository = FakeReservaRepository(reserva)
+    prestamo_repository = FakePrestamoRepository()
+    recurso_repository = FakeRecursoRepository(EstadoRecurso.EN_USO)
+    service = ReservaService(
+        reserva_repository,
+        make_prestamo_service(prestamo_repository, recurso_repository),
+    )
+
+    try:
+        service.convertir_a_prestamo(reserva.id)
+    except ValueError as error:
+        assert str(error) == "Recurso no disponible"
+    else:
+        raise AssertionError("Se esperaba rechazar un recurso no disponible")
+
+    assert prestamo_repository.saved == []
+    assert reserva.estado == EstadoReserva.CONFIRMADA
+
+
+def test_convertir_reserva_rechaza_recurso_inexistente():
+    reserva = make_reserva()
+    reserva_repository = FakeReservaRepository(reserva)
+    prestamo_repository = FakePrestamoRepository()
+    recurso_repository = FakeRecursoRepository(existe=False)
+    service = ReservaService(
+        reserva_repository,
+        make_prestamo_service(prestamo_repository, recurso_repository),
+    )
+
+    try:
+        service.convertir_a_prestamo(reserva.id)
+    except ValueError as error:
+        assert str(error) == "Recurso no encontrado"
+    else:
+        raise AssertionError("Se esperaba rechazar un recurso inexistente")
+
+    assert prestamo_repository.saved == []
+    assert reserva.estado == EstadoReserva.CONFIRMADA
