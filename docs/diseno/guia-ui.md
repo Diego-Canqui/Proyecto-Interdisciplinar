@@ -167,11 +167,11 @@ Reglas: cuerpo a 16px o más; **máximo 3 tamaños por pantalla**; títulos con
 ### Rutas actuales y visibilidad por rol
 
 Rutas existentes en `frontend/src/App.jsx`: `/login`, `/registro`, `/usuarios`, `/reputacion`,
-`/recursos`, `/reservas`, `/historial`.
+`/recursos`, `/reservas`, `/historial`, `/gestion-reputacion`.
 
 **Propuesta de navegación visible, pendiente de confirmar con el equipo.**
 
-| Ruta | Pantalla | ESTUDIANTE / DOCENTE | GESTOR_ALMACEN | ADMINISTRADOR_SISTEMA |
+| Ruta | Pantalla | ESTUDIANTE / DOCENTE / PERSONAL_ADMINISTRATIVO | GESTOR_ALMACEN | ADMINISTRADOR_SISTEMA |
 |---|---|---|---|---|
 | `/login` | Iniciar sesión | pública | pública | pública |
 | `/registro` | Registro | pública | pública | pública |
@@ -179,10 +179,13 @@ Rutas existentes en `frontend/src/App.jsx`: `/login`, `/registro`, `/usuarios`, 
 | `/reservas` | Mis reservas / Reservas | sí | sí | sí |
 | `/historial` | Historial / Préstamos | sí | sí | sí |
 | `/reputacion` | Mi reputación / Sanciones | sí | sí | sí |
-| `/usuarios` | Usuarios | no | no | sí |
+| `/usuarios` | Usuarios | no | sí | sí |
+| `/gestion-reputacion` | Gestión de reputación | no | sí | sí |
 
-- `GESTOR_ALMACEN` ve además las acciones de gestión (préstamos, sanciones) dentro de las mismas rutas.
-- `ADMINISTRADOR_SISTEMA` ve todo, incluida la gestión de usuarios.
+- `GESTOR_ALMACEN` ve las acciones de gestión de usuarios (`/usuarios`) y tiene una ruta propia para reputación (`/gestion-reputacion`); las acciones de gestión de préstamos siguen siendo de su propio contexto dentro de las mismas rutas.
+- `ADMINISTRADOR_SISTEMA` ve todo, con la misma barra de navegación que `GESTOR_ALMACEN`.
+- `PERSONAL_ADMINISTRATIVO` comparte exactamente la misma visibilidad que `ESTUDIANTE` y `DOCENTE`.
+- **Rótulo largo en la barra**: «Gestión de reputación» es el rótulo más largo de la navegación. La guía no fija una longitud máxima para los rótulos de enlace (solo que sean únicos), pero debe tenerse en cuenta que `.navbar__enlaces` no envuelve líneas (`flex-wrap`). Por debajo de 900px la barra oculta los enlaces (deuda aceptada); en anchos intermedios (900–1100px) se vigila que no desborde horizontalmente (D8, R8).
 - **Hoy no existen guardas por rol en el frontend**: esta tabla es solo navegación visible, no
   seguridad. La autorización real vive en el backend.
 
@@ -330,6 +333,12 @@ Mientras llega la respuesta. Texto claro, sin spinners caseros.
 | Reputación | `NORMAL` | `insignia--neutra` | gris |
 | Reputación | `BUENO` | `insignia--info` | azul |
 | Reputación | `EXCELENTE` | `insignia--exito` | verde |
+| Sanción | `Vigente` | `insignia--error` | rojo |
+| Sanción | `Expirada` | `insignia--neutra` | gris |
+| Excepción | `VIGENTE` | `insignia--exito` | verde |
+| Excepción | `PROGRAMADA` | `insignia--info` | azul |
+| Excepción | `VENCIDA` | `insignia--aviso` | ámbar |
+| Excepción | `ANULADA` | `insignia--neutra` | gris |
 
 Regla: **el color nunca es la única señal**; la insignia siempre muestra el estado como texto.
 
@@ -415,3 +424,8 @@ Cambios registrados:
   `<main className="contenedor pagina">`, y cada página aporta solo su contenido (§6).
   `ReputacionPage` y `UsuariosPage` dejan de aportar su propio `<main>`, la raíz `/` redirige a
   `/recursos` (no hay página de Inicio) y el menú móvil queda sin implementar. Spec 003.
+- **2026-10-21** — Incorporación del panel de gestión en `/gestion-reputacion` para `GESTOR_ALMACEN` y
+  `ADMINISTRADOR_SISTEMA`. Se actualiza la visibilidad de `/usuarios` para el gestor, se incorpora
+  `PERSONAL_ADMINISTRATIVO` a la tabla de visibilidad, se añade la nota sobre el rótulo largo en la
+  navbar (§6) y se documentan en §9 las insignias para estados de sanción (`Vigente`, `Expirada`) y de
+  excepción académica (`VIGENTE`, `PROGRAMADA`, `VENCIDA`, `ANULADA`). Spec 004.

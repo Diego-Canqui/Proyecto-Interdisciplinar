@@ -8,6 +8,7 @@ from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion
     AplicarSancionDTO,
     ElegibilidadDTO,
     ExcepcionAcademicaDTO,
+    PerfilGestionDTO,
     PerfilReputacionDTO,
     RegistrarExcepcionDTO,
     ResultadoAmnistiaDTO,
@@ -82,6 +83,29 @@ def obtener_elegibilidad(
     Lanza 401 si token inválido, expirado o usuario no existe.
     """
     return service.obtener_elegibilidad(usuario.id)
+
+
+@router.get("/usuarios/{usuario_id}/perfil", response_model=PerfilGestionDTO)
+def obtener_perfil_gestion(
+    usuario_id: UUID,
+    usuario: UsuarioDTO = Depends(require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)),  # noqa: B008
+    service: ReputacionService = Depends(get_reputacion_service),  # noqa: B008
+) -> PerfilGestionDTO:
+    """
+    Obtiene la ficha de reputación de un tercero (solo ADMINISTRADOR_SISTEMA o GESTOR_ALMACEN) (RF-04).
+
+    Requiere header: Authorization: Bearer <token> con rol ADMINISTRADOR_SISTEMA o GESTOR_ALMACEN
+
+    Retorna 200 con PerfilGestionDTO (puntaje, nivel, fecha_actualizacion, sanciones y
+    excepciones con su estado). Es de solo lectura: un usuario sin perfil devuelve su
+    estado inicial (500, NORMAL, sin sanciones) sin crearlo y con sus excepciones reales.
+    Lanza 401 si token inválido o expirado, 403 si no tiene rol requerido y 404 si el
+    usuario no existe.
+    """
+    try:
+        return service.obtener_perfil_gestion(usuario_id)
+    except UsuarioNoEncontrado as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/sanciones", response_model=SancionDTO, status_code=status.HTTP_201_CREATED)

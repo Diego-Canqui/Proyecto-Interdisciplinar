@@ -7,6 +7,7 @@ from uuid import UUID
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
     ElegibilidadDTO,
     ExcepcionAcademicaDTO,
+    PerfilGestionDTO,
     PerfilReputacionDTO,
     SancionDTO,
 )
@@ -121,6 +122,25 @@ class ReputacionService:
             f"hasta {sancion_bloqueante.fecha_fin:%Y-%m-%d}"
         )
         return ElegibilidadDTO(elegible=False, razon=razon)
+
+    def obtener_perfil_gestion(self, usuario_id: UUID) -> PerfilGestionDTO:
+        """
+        Consulta de solo lectura para los roles de gestión (RF-04).
+
+        - 404 si el usuario no existe (sin autocrear perfiles, RF-23)
+        - Sin perfil → 500/NORMAL, fecha_actualizacion=None y sanciones vacías (D5)
+        - Devuelve TODAS las excepciones con su estado derivado (D4)
+        - No escribe: no llama a guardar/flush (RNF-2)
+        """
+        self._verificar_usuario_existe(usuario_id)
+
+        perfil = self._perfil_reputacion_repository.obtener_por_usuario(usuario_id)
+        excepciones = self._excepcion_academica_repository.obtener_por_usuario(usuario_id)
+        ahora = datetime.now(UTC)
+
+        if perfil is None:
+            return PerfilGestionDTO.sin_perfil(usuario_id, excepciones, ahora)
+        return PerfilGestionDTO.from_entity(perfil, excepciones, ahora)
 
     def aplicar_sancion(
         self,

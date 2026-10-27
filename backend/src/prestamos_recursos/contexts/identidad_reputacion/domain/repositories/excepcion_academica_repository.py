@@ -22,3 +22,12 @@ class ExcepcionAcademicaRepository(ABC):
     @abstractmethod
     def obtener_vigentes_por_usuario(self, usuario_id: UUID) -> list[ExcepcionAcademica]:
         ...
+
+    @abstractmethod
+    def obtener_por_usuario(self, usuario_id: UUID) -> list[ExcepcionAcademica]:
+        """Todas las excepciones del usuario (activas, anuladas, vencidas y programadas),
+        ordenadas por fecha de inicio descendente. No filtra por vigencia.
+
+        Es una consulta de solo lectura: no crea ni modifica datos (RF-04).
+        """
+        ...

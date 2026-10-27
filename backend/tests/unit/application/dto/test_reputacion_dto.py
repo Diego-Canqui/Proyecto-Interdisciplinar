@@ -464,5 +464,269 @@ class TestDTOsExports:
         assert ResultadoAmnistiaDTO is not None
 
 
+@pytest.mark.unit
+class TestExcepcionGestionDTO:
+    """Tests para ExcepcionGestionDTO: estado derivado de la excepción (RF-04)."""
+
+    def test_estado_vigente(self):
+        """Activa y `ahora` dentro de [inicio, fin] → VIGENTE y vigente=True."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            ExcepcionGestionDTO,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
+            EstadoExcepcion,
+        )
+
+        ahora = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Examen final",
+            fecha_inicio=ahora - timedelta(days=1),
+            fecha_fin=ahora + timedelta(days=1),
+            activa=True,
+        )
+
+        dto = ExcepcionGestionDTO.from_entity(excepcion, ahora)
+
+        assert dto.estado == EstadoExcepcion.VIGENTE
+        assert dto.vigente is True
+
+    def test_estado_programada(self):
+        """Activa con fecha_inicio futura → PROGRAMADA y vigente=False."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            ExcepcionGestionDTO,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
+            EstadoExcepcion,
+        )
+
+        ahora = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Examen futuro",
+            fecha_inicio=ahora + timedelta(days=1),
+            fecha_fin=ahora + timedelta(days=2),
+            activa=True,
+        )
+
+        dto = ExcepcionGestionDTO.from_entity(excepcion, ahora)
+
+        assert dto.estado == EstadoExcepcion.PROGRAMADA
+        assert dto.vigente is False
+        assert dto.activa is True
+
+    def test_estado_vencida(self):
+        """Activa con fecha_fin pasada → VENCIDA y vigente=False."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            ExcepcionGestionDTO,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
+            EstadoExcepcion,
+        )
+
+        ahora = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Examen pasado",
+            fecha_inicio=ahora - timedelta(days=2),
+            fecha_fin=ahora - timedelta(days=1),
+            activa=True,
+        )
+
+        dto = ExcepcionGestionDTO.from_entity(excepcion, ahora)
+
+        assert dto.estado == EstadoExcepcion.VENCIDA
+        assert dto.vigente is False
+
+    def test_estado_anulada(self):
+        """activa=False con fechas futuras → ANULADA y vigente=False."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            ExcepcionGestionDTO,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
+            EstadoExcepcion,
+        )
+
+        ahora = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Registrada por error",
+            fecha_inicio=ahora + timedelta(days=1),
+            fecha_fin=ahora + timedelta(days=2),
+            activa=False,
+        )
+
+        dto = ExcepcionGestionDTO.from_entity(excepcion, ahora)
+
+        assert dto.estado == EstadoExcepcion.ANULADA
+        assert dto.vigente is False
+
+    def test_limites_inclusivos(self):
+        """ahora == fecha_inicio == fecha_fin → VIGENTE (regla inclusiva de la 002, RF-14)."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            ExcepcionGestionDTO,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
+            EstadoExcepcion,
+        )
+
+        ahora = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Instante único",
+            fecha_inicio=ahora,
+            fecha_fin=ahora,
+            activa=True,
+        )
+
+        dto = ExcepcionGestionDTO.from_entity(excepcion, ahora)
+
+        assert dto.estado == EstadoExcepcion.VIGENTE
+        assert dto.vigente is True
+
+    def test_serializacion_del_estado_en_json(self):
+        """El DTO serializa `estado` como texto y expone exactamente los campos de RF-04."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            ExcepcionGestionDTO,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
+            EstadoExcepcion,
+        )
+
+        ahora = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Examen final",
+            fecha_inicio=ahora - timedelta(days=1),
+            fecha_fin=ahora + timedelta(days=1),
+            activa=True,
+        )
+
+        datos = ExcepcionGestionDTO.from_entity(excepcion, ahora).model_dump(mode="json")
+
+        assert datos["estado"] == "VIGENTE"
+        assert datos["vigente"] is True
+        assert datos["activa"] is True
+        assert set(datos) == {
+            "id",
+            "motivo",
+            "fecha_inicio",
+            "fecha_fin",
+            "activa",
+            "vigente",
+            "estado",
+        }
+        assert EstadoExcepcion.VIGENTE.value == "VIGENTE"
+
+
+@pytest.mark.unit
+class TestPerfilGestionDTO:
+    """Tests para PerfilGestionDTO: ficha de reputación de un tercero (RF-04)."""
+
+    def test_from_entity(self):
+        """from_entity() mapea perfil, sanciones (con fecha_fin y vigente) y excepciones con estado."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            PerfilGestionDTO,
+            SancionDTO,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
+            EstadoExcepcion,
+        )
+
+        ahora = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
+        ahora_sancion = datetime.now(UTC)  # SancionDTO.vigente usa el reloj real de la entidad
+        usuario_id = uuid4()
+        perfil = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=usuario_id,
+            puntaje=PuntajeReputacion(puntos=490),
+            nivel=NivelReputacion.NORMAL,
+            fecha_actualizacion=ahora,
+            sanciones=[
+                Sancion(
+                    id=uuid4(),
+                    tipo=TipoSancion.TARDANZA,
+                    puntos_descuento=-10,
+                    monto_descuento=Decimal(0),
+                    motivo="Devolución tardía",
+                    fecha_aplicacion=ahora_sancion,
+                    fecha_fin=ahora_sancion + timedelta(days=3),
+                    activa=True,
+                )
+            ],
+        )
+        excepcion = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=usuario_id,
+            motivo="Examen final",
+            fecha_inicio=ahora - timedelta(days=1),
+            fecha_fin=ahora + timedelta(days=1),
+            activa=True,
+        )
+
+        dto = PerfilGestionDTO.from_entity(perfil, [excepcion], ahora)
+
+        assert dto.usuario_id == usuario_id
+        assert dto.puntaje == 490
+        assert dto.nivel == NivelReputacion.NORMAL
+        assert dto.fecha_actualizacion == ahora
+        assert len(dto.sanciones) == 1
+        assert isinstance(dto.sanciones[0], SancionDTO)
+        assert dto.sanciones[0].fecha_fin == ahora_sancion + timedelta(days=3)
+        assert dto.sanciones[0].vigente is True
+        assert len(dto.excepciones) == 1
+        assert dto.excepciones[0].estado == EstadoExcepcion.VIGENTE
+
+    def test_sin_perfil(self):
+        """sin_perfil() devuelve 500/NORMAL, sin fecha de actualización y sin sanciones."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            PerfilGestionDTO,
+        )
+
+        usuario_id = uuid4()
+
+        dto = PerfilGestionDTO.sin_perfil(usuario_id, [])
+
+        assert dto.usuario_id == usuario_id
+        assert dto.puntaje == 500
+        assert dto.nivel == NivelReputacion.NORMAL
+        assert dto.fecha_actualizacion is None
+        assert dto.sanciones == []
+        assert dto.excepciones == []
+
+    def test_dtos_existentes_sin_cambios(self):
+        """PerfilReputacionDTO y SancionDTO conservan exactamente sus campos (RF-04, D4)."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            PerfilReputacionDTO,
+            SancionDTO,
+        )
+
+        assert list(PerfilReputacionDTO.model_fields) == [
+            "id",
+            "usuario_id",
+            "puntaje",
+            "nivel",
+            "fecha_actualizacion",
+            "sanciones",
+        ]
+        assert list(SancionDTO.model_fields) == [
+            "id",
+            "tipo",
+            "puntos_descuento",
+            "monto_descuento",
+            "motivo",
+            "fecha_aplicacion",
+            "fecha_fin",
+            "activa",
+            "vigente",
+        ]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
