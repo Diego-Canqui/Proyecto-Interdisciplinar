@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { obtenerPerfil } from "../../identidad/api.js";
+import { listarUsuarios, obtenerPerfil } from "../../identidad/api.js";
 import { buscarRecursos } from "../../catalogo/api.js";
-import { listarReservasUsuario, solicitarReserva } from "../api.js";
+import {
+  cancelarReserva,
+  confirmarReserva,
+  convertirReservaAPrestamo,
+  listarReservasUsuario,
+  listarTodasReservas,
+  solicitarReserva,
+} from "../api.js";
 
+const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
 const ESTADOS_ACTIVOS = new Set(["PENDIENTE", "CONFIRMADA"]);
 
 const CLASE_ESTADO = {
@@ -28,13 +36,14 @@ function mostrarFecha(fecha) {
 }
 
 function mensajeError(error) {
-  if (error.status === 401) return "Tu sesión venció. Inicia sesión para continuar.";
-  if (error.status === 403) return "No tienes permiso para realizar esta acción.";
-  return error.message || "Ocurrió un error. Inténtalo de nuevo.";
+  if (error?.status === 401) return "Tu sesión venció. Inicia sesión para continuar.";
+  if (error?.status === 403) return "No tienes permiso para realizar esta acción.";
+  return error?.message || "Ocurrió un error. Inténtalo de nuevo.";
 }
 
 export default function MisReservasPage() {
   const [usuario, setUsuario] = useState(null);
+  const [usuarios, setUsuarios] = useState([]);
   const [recursos, setRecursos] = useState([]);
   const [reservas, setReservas] = useState([]);
   const [recursoId, setRecursoId] = useState("");
@@ -42,18 +51,42 @@ export default function MisReservasPage() {
   const [fechaFin, setFechaFin] = useState("");
   const [cargando, setCargando] = useState(true);
   const [enviando, setEnviando] = useState(false);
+  const [accionId, setAccionId] = useState("");
   const [error, setError] = useState("");
   const [exito, setExito] = useState("");
+
+  const esGestion = Boolean(
+    usuario?.roles?.some((rol) => ROLES_GESTION.includes(rol))
+  );
 
   const recursosPorId = useMemo(
     () => new Map(recursos.map((recurso) => [recurso.id, recurso])),
     [recursos]
   );
-  const reservasActivas = reservas.filter((reserva) => ESTADOS_ACTIVOS.has(reserva.estado));
 
-  const cargarReservas = async (idUsuario) => {
-    const datos = await listarReservasUsuario(idUsuario);
-    setReservas(datos);
+  const usuariosPorId = useMemo(
+    () => new Map(usuarios.map((u) => [u.id, u])),
+    [usuarios]
+  );
+
+  const reservasActivas = reservas.filter((reserva) =>
+    ESTADOS_ACTIVOS.has(reserva.estado)
+  );
+
+  const accionEnCurso = Boolean(accionId);
+
+  const cargarReservas = async (perfilActual = usuario) => {
+    if (!perfilActual) return;
+    const tieneGestion = Boolean(
+      perfilActual?.roles?.some((rol) => ROLES_GESTION.includes(rol))
+    );
+    if (tieneGestion) {
+      const datos = await listarTodasReservas();
+      setReservas(datos);
+    } else {
+      const datos = await listarReservasUsuario(perfilActual.id);
+      setReservas(datos);
+    }
   };
 
   useEffect(() => {
@@ -68,15 +101,33 @@ export default function MisReservasPage() {
 
       try {
         const perfil = await obtenerPerfil();
-        if (vigente) setUsuario(perfil);
-        const [listaRecursos, listaReservas] = await Promise.all([
-          buscarRecursos(),
-          listarReservasUsuario(perfil.id),
-        ]);
-        if (vigente) {
-          setUsuario(perfil);
-          setRecursos(listaRecursos);
-          setReservas(listaReservas);
+        const tieneGestion = Boolean(
+          perfil?.roles?.some((rol) => ROLES_GESTION.includes(rol))
+        );
+
+        if (tieneGestion) {
+          const [listaRecursos, listaReservas, listaUsuarios] = await Promise.all([
+            buscarRecursos(),
+            listarTodasReservas(),
+            listarUsuarios().catch(() => []),
+          ]);
+          if (vigente) {
+            setUsuario(perfil);
+            setRecursos(listaRecursos);
+            setReservas(listaReservas);
+            setUsuarios(listaUsuarios || []);
+          }
+        } else {
+          const [listaRecursos, listaReservas] = await Promise.all([
+            buscarRecursos(),
+            listarReservasUsuario(perfil.id),
+          ]);
+          if (vigente) {
+            setUsuario(perfil);
+            setRecursos(listaRecursos);
+            setReservas(listaReservas);
+            setUsuarios([]);
+          }
         }
       } catch (errorCarga) {
         if (vigente) setError(mensajeError(errorCarga));
@@ -109,22 +160,88 @@ export default function MisReservasPage() {
     }
 
     setEnviando(true);
+    let reservaCreada;
     try {
-      await solicitarReserva({
+      reservaCreada = await solicitarReserva({
         usuario_id: usuario.id,
         recurso_id: recursoId,
         fecha_inicio: inicio.toISOString(),
         fecha_fin: fin.toISOString(),
       });
-      await cargarReservas(usuario.id);
+    } catch (errorSolicitud) {
+      setError(mensajeError(errorSolicitud));
+      setEnviando(false);
+      return;
+    }
+
+    try {
+      await confirmarReserva(reservaCreada.id);
+      await cargarReservas(usuario);
       setRecursoId("");
       setFechaInicio("");
       setFechaFin("");
-      setExito("Solicitud de reserva registrada.");
-    } catch (errorSolicitud) {
-      setError(mensajeError(errorSolicitud));
+      setExito("Reserva registrada y confirmada.");
+    } catch (errorConfirmacion) {
+      await cargarReservas(usuario);
+      setRecursoId("");
+      setFechaInicio("");
+      setFechaFin("");
+      setError(
+        "La reserva fue creada en estado PENDIENTE, pero no pudo confirmarse automáticamente: " +
+          mensajeError(errorConfirmacion) +
+          ". Puedes confirmarla desde la tabla de reservas activas."
+      );
     } finally {
       setEnviando(false);
+    }
+  };
+
+  const manejarConfirmar = async (idReserva) => {
+    setError("");
+    setExito("");
+    setAccionId(idReserva);
+    try {
+      await confirmarReserva(idReserva);
+      await cargarReservas(usuario);
+      setExito("Reserva confirmada.");
+    } catch (errorAccion) {
+      setError(mensajeError(errorAccion));
+    } finally {
+      setAccionId("");
+    }
+  };
+
+  const manejarIniciarPrestamo = async (idReserva) => {
+    setError("");
+    setExito("");
+    setAccionId(idReserva);
+    try {
+      await convertirReservaAPrestamo(idReserva);
+      const [, listaRecursos] = await Promise.all([
+        cargarReservas(usuario),
+        buscarRecursos(),
+      ]);
+      setRecursos(listaRecursos);
+      setExito("Préstamo iniciado. Puedes consultarlo y registrar su devolución en Historial.");
+    } catch (errorAccion) {
+      setError(mensajeError(errorAccion));
+    } finally {
+      setAccionId("");
+    }
+  };
+
+  const manejarCancelar = async (idReserva) => {
+    setError("");
+    setExito("");
+    setAccionId(idReserva);
+    try {
+      await cancelarReserva(idReserva);
+      await cargarReservas(usuario);
+      setExito("Reserva cancelada.");
+    } catch (errorAccion) {
+      setError(mensajeError(errorAccion));
+    } finally {
+      setAccionId("");
     }
   };
 
@@ -152,7 +269,9 @@ export default function MisReservasPage() {
       <header className="pagina__cabecera">
         <h1 id="titulo-reservas" className="pagina__titulo">Mis reservas</h1>
         <p className="pagina__subtitulo">
-          Solicita un recurso y revisa el estado de tus reservas activas.
+          {esGestion
+            ? "Gestiona las solicitudes de los usuarios y reserva recursos del catálogo."
+            : "Solicita un recurso y revisa el estado de tus reservas activas."}
         </p>
       </header>
 
@@ -233,8 +352,16 @@ export default function MisReservasPage() {
 
         {reservasActivas.length === 0 ? (
           <div className="estado-vacio">
-            <p className="estado-vacio__titulo">Todavía no tienes reservas activas</p>
-            <p>Completa el formulario para solicitar un recurso.</p>
+            <p className="estado-vacio__titulo">
+              {esGestion
+                ? "No hay reservas activas en el sistema"
+                : "Todavía no tienes reservas activas"}
+            </p>
+            <p>
+              {esGestion
+                ? "Cuando los usuarios soliciten reservas, aparecerán listadas aquí."
+                : "Completa el formulario para solicitar un recurso."}
+            </p>
             <Link className="boton boton--secundario" to="/recursos">Ver catálogo</Link>
           </div>
         ) : (
@@ -243,26 +370,80 @@ export default function MisReservasPage() {
               <thead>
                 <tr>
                   <th>Recurso</th>
+                  {esGestion && <th>Usuario</th>}
                   <th>Inicio</th>
                   <th>Fin</th>
                   <th>Estado</th>
+                  <th>Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {reservasActivas.map((reserva) => (
-                  <tr key={reserva.id}>
-                    <td data-etiqueta="Recurso">
-                      {recursosPorId.get(reserva.recurso_id)?.nombre || "Recurso del catálogo"}
-                    </td>
-                    <td data-etiqueta="Inicio">{mostrarFecha(reserva.fecha_inicio)}</td>
-                    <td data-etiqueta="Fin">{mostrarFecha(reserva.fecha_fin)}</td>
-                    <td data-etiqueta="Estado">
-                      <span className={`insignia ${CLASE_ESTADO[reserva.estado] || "insignia--neutra"}`}>
-                        {reserva.estado}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {reservasActivas.map((reserva) => {
+                  const titular = usuariosPorId.get(reserva.usuario_id);
+                  const textoUsuario = titular
+                    ? `${titular.nombre} (${titular.correo})`
+                    : reserva.usuario_id || "Usuario desconocido";
+
+                  return (
+                    <tr key={reserva.id}>
+                      <td data-etiqueta="Recurso">
+                        {recursosPorId.get(reserva.recurso_id)?.nombre || "Recurso del catálogo"}
+                      </td>
+                      {esGestion && (
+                        <td data-etiqueta="Usuario">{textoUsuario}</td>
+                      )}
+                      <td data-etiqueta="Inicio">{mostrarFecha(reserva.fecha_inicio)}</td>
+                      <td data-etiqueta="Fin">{mostrarFecha(reserva.fecha_fin)}</td>
+                      <td data-etiqueta="Estado">
+                        <span className={`insignia ${CLASE_ESTADO[reserva.estado] || "insignia--neutra"}`}>
+                          {reserva.estado}
+                        </span>
+                      </td>
+                      <td data-etiqueta="Acciones">
+                        {reserva.estado === "PENDIENTE" && (
+                          <>
+                            <button
+                              type="button"
+                              className="boton boton--secundario boton--sm"
+                              onClick={() => manejarConfirmar(reserva.id)}
+                              disabled={accionEnCurso}
+                            >
+                              {accionId === reserva.id ? "Confirmando..." : "Confirmar"}
+                            </button>{" "}
+                            <button
+                              type="button"
+                              className="boton boton--peligro boton--sm"
+                              onClick={() => manejarCancelar(reserva.id)}
+                              disabled={accionEnCurso}
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        )}
+                        {reserva.estado === "CONFIRMADA" && (
+                          <>
+                            <button
+                              type="button"
+                              className="boton boton--secundario boton--sm"
+                              onClick={() => manejarIniciarPrestamo(reserva.id)}
+                              disabled={accionEnCurso}
+                            >
+                              {accionId === reserva.id ? "Iniciando..." : "Iniciar préstamo"}
+                            </button>{" "}
+                            <button
+                              type="button"
+                              className="boton boton--peligro boton--sm"
+                              onClick={() => manejarCancelar(reserva.id)}
+                              disabled={accionEnCurso}
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

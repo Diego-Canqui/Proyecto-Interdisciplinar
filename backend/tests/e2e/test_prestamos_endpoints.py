@@ -6,6 +6,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
+from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import UsuarioDTO
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import RolUsuario
+from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies import (
+    get_current_user,
+)
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_garantia import EstadoGarantia
@@ -31,6 +36,9 @@ class FakePrestamoRepository:
 
     def obtener_por_id(self, id_prestamo):
         return next((p for p in self.prestamos if p.id == id_prestamo), None)
+
+    def obtener_todos(self):
+        return list(self.prestamos)
 
 
 class FakeChecklistRepository:
@@ -201,4 +209,107 @@ def test_devolucion_prestamo_inexistente_retorna_404():
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Préstamo no encontrado"
+
+
+def _crear_usuario(usuario_id, roles):
+    return UsuarioDTO(
+        id=usuario_id,
+        nombre="Usuario Test",
+        correo="test@example.com",
+        telefono=None,
+        roles=roles,
+        estado=True,
+    )
+
+
+@pytest.mark.e2e
+def test_listar_todos_prestamos_con_gestor_almacen_retorna_200():
+    usuario_1 = uuid4()
+    usuario_2 = uuid4()
+    p1 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_1,
+        fecha_inicio=datetime(2026, 10, 10, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 15, tzinfo=UTC),
+        estado=EstadoPrestamo.DEVUELTO,
+    )
+    p2 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_2,
+        fecha_inicio=datetime(2026, 10, 20, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 25, tzinfo=UTC),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([p1, p2]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+
+    response = client.get("/prestamos")
+
+    assert response.status_code == 200
+    datos = response.json()
+    assert len(datos) == 2
+    ids_recibidos = {item["id"] for item in datos}
+    assert ids_recibidos == {str(p1.id), str(p2.id)}
+
+
+@pytest.mark.e2e
+def test_listar_todos_prestamos_con_administrador_sistema_retorna_200():
+    p1 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 10, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 15, tzinfo=UTC),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([p1]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.ADMINISTRADOR_SISTEMA]
+    )
+
+    response = client.get("/prestamos")
+
+    assert response.status_code == 200
+    datos = response.json()
+    assert len(datos) == 1
+    assert datos[0]["id"] == str(p1.id)
+
+
+@pytest.mark.e2e
+def test_listar_todos_prestamos_con_estudiante_retorna_403():
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.ESTUDIANTE]
+    )
+
+    response = client.get("/prestamos")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.e2e
+def test_listar_todos_prestamos_sin_token_retorna_401():
+    response = client.get("/prestamos")
+
+    assert response.status_code == 401
+
 

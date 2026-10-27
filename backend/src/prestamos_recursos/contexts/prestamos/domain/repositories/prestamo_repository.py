@@ -24,3 +24,7 @@ class PrestamoRepository(ABC):
     @abstractmethod
     def obtener_por_usuario(self, id_usuario: UUID) -> list[Prestamo]:
         ...
+
+    @abstractmethod
+    def obtener_todos(self) -> list[Prestamo]:
+        ...
