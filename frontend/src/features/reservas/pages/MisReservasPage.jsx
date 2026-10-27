@@ -160,37 +160,26 @@ export default function MisReservasPage() {
     }
 
     setEnviando(true);
-    let reservaCreada;
     try {
-      reservaCreada = await solicitarReserva({
+      const reservaCreada = await solicitarReserva({
         usuario_id: usuario.id,
         recurso_id: recursoId,
         fecha_inicio: inicio.toISOString(),
         fecha_fin: fin.toISOString(),
       });
+      if (reservaCreada?.estado === "PENDIENTE") {
+        setExito(
+          "El horario ya tiene una reserva confirmada. Tu solicitud quedó en lista de espera (PENDIENTE) y se priorizará según tu reputación."
+        );
+      } else {
+        setExito("Reserva registrada y confirmada.");
+      }
+      await cargarReservas(usuario);
+      setRecursoId("");
+      setFechaInicio("");
+      setFechaFin("");
     } catch (errorSolicitud) {
       setError(mensajeError(errorSolicitud));
-      setEnviando(false);
-      return;
-    }
-
-    try {
-      await confirmarReserva(reservaCreada.id);
-      await cargarReservas(usuario);
-      setRecursoId("");
-      setFechaInicio("");
-      setFechaFin("");
-      setExito("Reserva registrada y confirmada.");
-    } catch (errorConfirmacion) {
-      await cargarReservas(usuario);
-      setRecursoId("");
-      setFechaInicio("");
-      setFechaFin("");
-      setError(
-        "La reserva fue creada en estado PENDIENTE, pero no pudo confirmarse automáticamente: " +
-          mensajeError(errorConfirmacion) +
-          ". Puedes confirmarla desde la tabla de reservas activas."
-      );
     } finally {
       setEnviando(false);
     }
@@ -402,14 +391,17 @@ export default function MisReservasPage() {
                       <td data-etiqueta="Acciones">
                         {reserva.estado === "PENDIENTE" && (
                           <>
-                            <button
-                              type="button"
-                              className="boton boton--secundario boton--sm"
-                              onClick={() => manejarConfirmar(reserva.id)}
-                              disabled={accionEnCurso}
-                            >
-                              {accionId === reserva.id ? "Confirmando..." : "Confirmar"}
-                            </button>{" "}
+                            {esGestion && (
+                              <button
+                                type="button"
+                                className="boton boton--secundario boton--sm"
+                                onClick={() => manejarConfirmar(reserva.id)}
+                                disabled={accionEnCurso}
+                              >
+                                {accionId === reserva.id ? "Confirmando..." : "Confirmar"}
+                              </button>
+                            )}
+                            {esGestion && " "}
                             <button
                               type="button"
                               className="boton boton--peligro boton--sm"
