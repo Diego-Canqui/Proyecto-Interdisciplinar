@@ -12,8 +12,20 @@ from prestamos_recursos.contexts.catalogo.infrastructure.repositories import (
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
     UsuarioDTO,
 )
+from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
+    ReputacionService,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import (
     RolUsuario,
+)
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
+    SqlExcepcionAcademicaRepository,
+)
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_perfil_reputacion_repository import (
+    SqlPerfilReputacionRepository,
+)
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_usuario_repository import (
+    SqlUsuarioRepository,
 )
 from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies import (
     get_current_user,
@@ -48,7 +60,12 @@ def obtener_servicio(sesion: Annotated[Session, Depends(get_session)]) -> Reserv
         SqlGarantiaRepository(sesion),
         recurso_repository=SqlRecursoRepository(sesion),
     )
-    return ReservaService(SqlReservaRepository(sesion), prestamos)
+    reputacion = ReputacionService(
+        SqlPerfilReputacionRepository(sesion),
+        SqlExcepcionAcademicaRepository(sesion),
+        SqlUsuarioRepository(sesion),
+    )
+    return ReservaService(SqlReservaRepository(sesion), prestamos, reputacion)
 
 
 ServicioReservas = Annotated[ReservaService, Depends(obtener_servicio)]
@@ -148,6 +165,11 @@ def confirmar_reserva(
     servicio: ServicioReservas,
     usuario: UsuarioAutenticado,
 ) -> ReservaDTO:
+    if not _tiene_rol_gestion(usuario):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="solo el personal de gestión puede confirmar reservas",
+        )
     _reserva_del_usuario(id_reserva, servicio, usuario)
     try:
         return servicio.confirmar_reserva(id_reserva)

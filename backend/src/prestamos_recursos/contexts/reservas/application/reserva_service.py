@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
@@ -16,6 +17,11 @@ from prestamos_recursos.contexts.reservas.domain.services.algoritmo_prioridad_se
     AlgoritmoPrioridadService,
 )
 
+if TYPE_CHECKING:
+    from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
+        ReputacionService,
+    )
+
 
 class ReservaService:
     """«Service» ReservaService."""
@@ -24,19 +30,41 @@ class ReservaService:
         self,
         reserva_repository: ReservaRepository,
         prestamo_service: PrestamoService,
+        reputacion_service: ReputacionService | None = None,
     ) -> None:
         self._reserva_repository = reserva_repository
         self._prioridad_service = AlgoritmoPrioridadService()
         self._prestamo_service = prestamo_service
+        self._reputacion_service = reputacion_service
+
+    def _obtener_puntaje_usuario(self, usuario_id: UUID) -> int:
+        if self._reputacion_service is None:
+            return 500
+        try:
+            perfil = self._reputacion_service.obtener_perfil(usuario_id)
+            return perfil.puntaje
+        except Exception:  # noqa: BLE001
+            return 500
 
     def crear_reserva(self, datos: CrearReservaDTO) -> ReservaDTO:
         reserva = Reserva.crear(**datos.model_dump())
         reservas_activas = self._reserva_repository.obtener_activas_por_recurso(
             reserva.recurso_id
         )
-        if any(reserva.se_superpone_con(otra) for otra in reservas_activas):
-            raise ValueError("el recurso ya tiene una reserva activa en ese horario")
+        if any(
+            otra.usuario_id == reserva.usuario_id and reserva.se_superpone_con(otra)
+            for otra in reservas_activas
+        ):
+            raise ValueError("ya tienes una reserva activa para este recurso en ese horario")
 
+        if any(
+            otra.estado == EstadoReserva.CONFIRMADA and reserva.se_superpone_con(otra)
+            for otra in reservas_activas
+        ):
+            self._reserva_repository.guardar(reserva)
+            return ReservaDTO.model_validate(reserva)
+
+        reserva.confirmar()
         self._reserva_repository.guardar(reserva)
         return ReservaDTO.model_validate(reserva)
 
@@ -57,10 +85,12 @@ class ReservaService:
             reserva.recurso_id
         )
         if any(
-            otra.id != reserva.id and reserva.se_superpone_con(otra)
+            otra.id != reserva.id
+            and otra.estado == EstadoReserva.CONFIRMADA
+            and reserva.se_superpone_con(otra)
             for otra in reservas_activas
         ):
-            raise ValueError("el recurso ya tiene una reserva activa en ese horario")
+            raise ValueError("el recurso ya tiene una reserva confirmada en ese horario")
 
         reserva.confirmar()
         self._reserva_repository.guardar(reserva)
@@ -68,8 +98,39 @@ class ReservaService:
 
     def cancelar_reserva(self, id_reserva: UUID) -> bool:
         reserva = self._buscar_reserva(id_reserva)
+        estaba_confirmada = reserva.estado == EstadoReserva.CONFIRMADA
+        inicio_liberado = Reserva._a_utc(reserva.fecha_inicio)
+        fin_liberado = Reserva._a_utc(reserva.fecha_fin)
+
         reserva.cancelar()
         self._reserva_repository.guardar(reserva)
+
+        if estaba_confirmada:
+            cola = self._reserva_repository.obtener_cola_por_recurso(reserva.recurso_id)
+            candidatas = [
+                c
+                for c in cola
+                if c.esta_vigente()
+                and Reserva._a_utc(c.fecha_inicio) < fin_liberado
+                and inicio_liberado < Reserva._a_utc(c.fecha_fin)
+            ]
+            if candidatas:
+                puntajes = {
+                    c.usuario_id: self._obtener_puntaje_usuario(c.usuario_id)
+                    for c in candidatas
+                }
+                ordenadas = self._prioridad_service.ordenar_cola_espera(candidatas, puntajes)
+                confirmadas_actuales = [
+                    r
+                    for r in self._reserva_repository.obtener_activas_por_recurso(reserva.recurso_id)
+                    if r.estado == EstadoReserva.CONFIRMADA
+                ]
+                for candidata in ordenadas:
+                    if not any(candidata.se_superpone_con(conf) for conf in confirmadas_actuales):
+                        candidata.confirmar()
+                        self._reserva_repository.guardar(candidata)
+                        break
+
         return True
 
     def convertir_a_prestamo(self, id_reserva: UUID) -> bool:
@@ -94,7 +155,11 @@ class ReservaService:
     def obtener_cola_espera(self, id_recurso: UUID) -> list[ReservaDTO]:
         reservas = self._reserva_repository.obtener_cola_por_recurso(id_recurso)
         vigentes = [reserva for reserva in reservas if reserva.esta_vigente()]
-        ordenadas = self._prioridad_service.ordenar_cola_espera(vigentes)
+        puntajes = {
+            reserva.usuario_id: self._obtener_puntaje_usuario(reserva.usuario_id)
+            for reserva in vigentes
+        }
+        ordenadas = self._prioridad_service.ordenar_cola_espera(vigentes, puntajes)
         return [ReservaDTO.model_validate(reserva) for reserva in ordenadas]
 
     def _buscar_reserva(self, id_reserva: UUID) -> Reserva:
