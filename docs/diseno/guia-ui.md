@@ -150,9 +150,8 @@ Reglas: cuerpo a 16px o más; **máximo 3 tamaños por pantalla**; títulos con
   `<main className="contenedor pagina">` donde se renderiza la ruta activa. **Cada página NO monta
   `<main>` ni la navbar**: entrega únicamente su contenido, con `.pagina__cabecera`,
   `.pagina__titulo` y `.pagina__subtitulo`. Debe haber un único `<main>` por documento, el del
-  layout; `ReputacionPage` y `UsuariosPage` ya lo cumplen, mientras que las páginas de `catalogo`,
-  `reservas` y `prestamos` conservan su `<main>` anidado como deuda de sus dueños hasta que se
-  rediseñen con esta guía.
+  layout; `ReputacionPage`, `UsuariosPage`, `MisReservasPage` y `HistorialPage` ya lo cumplen (las
+  páginas de `reservas` y `prestamos` ya no montan `<main>` propio tras la Spec 005).
 - Barra superior (la monta el layout): `<header className="navbar">` con
   `.navbar__contenido contenedor`, `.navbar__marca` y un único
   `<nav className="navbar__enlaces" aria-label="Navegación principal">` con `.navbar__enlace`
@@ -322,6 +321,7 @@ Mientras llega la respuesta. Texto claro, sin spinners caseros.
 | Reserva | `VENCIDA` | `insignia--error` | rojo |
 | Reserva | `CONVERTIDA` | `insignia--info` | azul |
 | Préstamo | `ACTIVO` | `insignia--info` | azul |
+| Préstamo | `ENTREGADO` | `insignia--info` | azul |
 | Préstamo | `DEVUELTO` | `insignia--exito` | verde |
 | Préstamo | `VENCIDO` | `insignia--error` | rojo |
 | Préstamo | `CANCELADO` | `insignia--neutra` | gris |
@@ -429,3 +429,7 @@ Cambios registrados:
   `PERSONAL_ADMINISTRATIVO` a la tabla de visibilidad, se añade la nota sobre el rótulo largo en la
   navbar (§6) y se documentan en §9 las insignias para estados de sanción (`Vigente`, `Expirada`) y de
   excepción académica (`VIGENTE`, `PROGRAMADA`, `VENCIDA`, `ANULADA`). Spec 004.
+- **2026-10-27** — Las páginas de reservas (`MisReservasPage`) y préstamos (`HistorialPage`) eliminan
+  su `<main>` anidado y estilos en línea (§6), adoptando el layout compartido y las clases de
+  `global.css`. Se añade el estado `ENTREGADO` a la tabla de estados de préstamo con insignia
+  `insignia--info` (§9). Spec 005.
