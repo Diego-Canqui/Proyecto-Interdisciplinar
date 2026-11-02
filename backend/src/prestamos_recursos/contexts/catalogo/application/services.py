@@ -105,6 +105,51 @@ class RecursoApplicationService:
             for r in recursos
         ]
 
+    def actualizar_recurso(
+        self,
+        id_recurso: UUID,
+        nombre: str,
+        descripcion: str,
+        categoria: str,
+        marca: str,
+        modelo: str,
+        numero_serie: str,
+        color: str,
+        estado_fisico: str,
+        foto_url: str,
+    ) -> RecursoDTO:
+        recurso = self._recurso_repository.obtener_por_id(id_recurso)
+        if not recurso:
+            raise ValueError(f"Recurso con id {id_recurso} no encontrado.")
+        ficha = FichaTecnica(
+            marca=marca,
+            modelo=modelo,
+            numero_serie=numero_serie,
+            color=color,
+            estado_fisico=estado_fisico,
+            foto_url=foto_url,
+        )
+        if not ficha.es_valida():
+            raise ValueError("La ficha técnica proporcionada no es válida.")
+        recurso.nombre = nombre
+        recurso.descripcion = descripcion
+        recurso.categoria = categoria
+        recurso.ficha_tecnica = ficha
+        self._recurso_repository.guardar(recurso)
+        return RecursoDTO(
+            id=recurso.id,
+            nombre=recurso.nombre,
+            descripcion=recurso.descripcion,
+            categoria=recurso.categoria,
+            estado=recurso.estado,
+            marca=ficha.marca,
+            modelo=ficha.modelo,
+            numero_serie=ficha.numero_serie,
+            color=ficha.color,
+            estado_fisico=ficha.estado_fisico,
+            foto_url=ficha.foto_url,
+        )
+
     def actualizar_estado(self, id_recurso: UUID, nuevo_estado: EstadoRecurso) -> None:
         recurso = self._recurso_repository.obtener_por_id(id_recurso)
         if not recurso:

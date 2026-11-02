@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -128,8 +128,8 @@ def test_procesar_devolucion_puntual_retorna_cero_y_premia_usuario():
         reserva_id=uuid4(),
         recurso_id=uuid4(),
         usuario_id=usuario_id,
-        fecha_inicio=datetime(2026, 10, 20, tzinfo=UTC),
-        fecha_fin=datetime(2026, 10, 30, tzinfo=UTC),
+        fecha_inicio=datetime.now(UTC) - timedelta(days=2),
+        fecha_fin=datetime.now(UTC) + timedelta(days=5),
         estado=EstadoPrestamo.ENTREGADO,
     )
     premiados = []
@@ -156,7 +156,7 @@ def test_ciclo_entrega_completo_confirma_checklist_y_premia_puntualidad():
         recurso_id=uuid4(),
         usuario_id=usuario_id,
         fecha_inicio=datetime.now(UTC),
-        fecha_fin=datetime(2026, 10, 30, tzinfo=UTC),
+        fecha_fin=datetime.now(UTC) + timedelta(days=5),
         estado=EstadoPrestamo.ACTIVO,
     )
     prestamo_repository = FakePrestamoRepository([prestamo])

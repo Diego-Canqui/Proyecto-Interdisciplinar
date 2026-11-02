@@ -33,3 +33,23 @@ class CrearRecursoDTO(BaseModel):
     color: str
     estado_fisico: str
     foto_url: str
+
+
+class ActualizarEstadoRecursoDTO(BaseModel):
+    """DTO para actualizar el estado de un recurso."""
+
+    estado: EstadoRecurso
+
+
+class ActualizarRecursoDTO(BaseModel):
+    """DTO para actualizar los datos y ficha técnica de un recurso."""
+
+    nombre: str
+    descripcion: str
+    categoria: str
+    marca: str
+    modelo: str
+    numero_serie: str
+    color: str
+    estado_fisico: str
+    foto_url: str

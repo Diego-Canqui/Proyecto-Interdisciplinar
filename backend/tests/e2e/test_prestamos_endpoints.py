@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -138,7 +138,7 @@ def test_ciclo_entrega_endpoints_completo():
         recurso_id=uuid4(),
         usuario_id=uuid4(),
         fecha_inicio=datetime.now(UTC),
-        fecha_fin=datetime(2026, 10, 30, tzinfo=UTC),
+        fecha_fin=datetime.now(UTC) + timedelta(days=7),
         estado=EstadoPrestamo.ACTIVO,
     )
     prestamo_repository = FakePrestamoRepository([prestamo])
@@ -311,5 +311,75 @@ def test_listar_todos_prestamos_sin_token_retorna_401():
     response = client.get("/prestamos")
 
     assert response.status_code == 401
+
+
+@pytest.mark.e2e
+def test_renovar_prestamo_activo():
+    ahora = datetime.now(UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=5),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    repo = FakePrestamoRepository([prestamo])
+    service = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    response = client.post(f"/prestamos/{prestamo.id}/renovar")
+    assert response.status_code == 200
+    assert "renovado exitosamente" in response.json()["detalle"]
+    assert prestamo.fecha_fin > ahora + timedelta(days=10)
+
+
+@pytest.mark.e2e
+def test_completar_entrega_unificada():
+    ahora = datetime.now(UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=5),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    prestamo_repository = FakePrestamoRepository([prestamo])
+    checklist_repository = FakeChecklistRepository()
+    garantia_repository = FakeGarantiaRepository()
+    service = PrestamoService(
+        prestamo_repository=prestamo_repository,
+        checklist_repository=checklist_repository,
+        garantia_repository=garantia_repository,
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    res = client.post(
+        f"/prestamos/{prestamo.id}/entrega/completar",
+        json={
+            "tipo_garantia": "CARNET_UNIVERSITARIO",
+            "compromiso_contenido": "Compromiso de entrega de equipo",
+            "compromiso_firma_url": "https://example.com/firma.png",
+            "compromiso_testigo": "Operador Almacén",
+            "observaciones_checklist": "Pantalla sin arañazos, cable y cargador incluidos",
+            "fotos_urls": ["https://example.com/foto1.jpg"],
+        },
+    )
+    assert res.status_code == 200
+    assert res.json()["estado"] == "ENTREGADO"
+    assert prestamo.estado == EstadoPrestamo.ENTREGADO
+
+    # Consultar inspección
+    res_insp = client.get(f"/prestamos/{prestamo.id}/inspeccion")
+    assert res_insp.status_code == 200
+    insp_data = res_insp.json()
+    assert insp_data["checklist_inicial"]["completo"] is True
+    assert "Pantalla sin arañazos" in insp_data["checklist_inicial"]["observaciones"]
+    assert insp_data["garantia"]["tipo"] == "CARNET_UNIVERSITARIO"
 
 
