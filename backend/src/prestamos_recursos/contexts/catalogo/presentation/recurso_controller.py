@@ -68,7 +68,7 @@ def obtener_ficha_tecnica(id_recurso: UUID, session: Session = Depends(get_sessi
 def actualizar_recurso(
     id_recurso: UUID,
     dto: ActualizarRecursoDTO,
-    session: Session = Depends(get_session),
+    session: Session = Depends(get_session),  # noqa: B008
 ):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
@@ -86,23 +86,35 @@ def actualizar_recurso(
             foto_url=dto.foto_url,
         )
     except ValueError as e:
-        status_code = status.HTTP_404_NOT_FOUND if "no encontrado" in str(e) else status.HTTP_400_BAD_REQUEST
-        raise HTTPException(status_code=status_code, detail=str(e))
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if "no encontrado" in str(e)
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
 
 
 @router.patch("/{id_recurso}/estado", response_model=dict)
 def actualizar_estado(
     id_recurso: UUID,
     dto: ActualizarEstadoRecursoDTO,
-    session: Session = Depends(get_session),
+    session: Session = Depends(get_session),  # noqa: B008
 ):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
     try:
         service.actualizar_estado(id_recurso, dto.estado)
-        return {"id_recurso": id_recurso, "estado": dto.estado, "mensaje": "Estado actualizado exitosamente"}
+        return {
+            "id_recurso": id_recurso,
+            "estado": dto.estado,
+            "mensaje": "Estado actualizado exitosamente",
+        }
     except ValueError as e:
-        status_code = status.HTTP_404_NOT_FOUND if "no encontrado" in str(e) else status.HTTP_400_BAD_REQUEST
-        raise HTTPException(status_code=status_code, detail=str(e))
-    except (TypeError, Exception) as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if "no encontrado" in str(e)
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
+    except TypeError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e

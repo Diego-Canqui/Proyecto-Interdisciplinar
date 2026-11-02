@@ -706,7 +706,7 @@ export default function HistorialPage() {
                 const nombreUsuario = usuarioObj
                   ? `${usuarioObj.nombre} (${usuarioObj.correo})`
                   : prestamo.usuario_id;
-                const puedeDevolver = ESTADOS_ACCION_DEVOLUCION.has(prestamo.estado);
+                const puedeDevolver = esGestion && ESTADOS_ACCION_DEVOLUCION.has(prestamo.estado);
                 const puedeRenovar = prestamo.estado === "ACTIVO" || prestamo.estado === "ENTREGADO";
                 const estaRenovando = renovandoId === prestamo.id;
 

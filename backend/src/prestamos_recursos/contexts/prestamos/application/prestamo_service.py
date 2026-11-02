@@ -180,9 +180,12 @@ class PrestamoService:
         puntual = datetime.now(UTC).date() <= fecha_inicio.astimezone(UTC).date()
         prestamo.marcar_entregado()
         self._prestamo_repository.guardar(prestamo)
-        if puntual and self._reputacion_service is not None:
-            if hasattr(self._reputacion_service, "premiar_entrega_puntual"):
-                self._reputacion_service.premiar_entrega_puntual(prestamo.usuario_id)
+        if (
+            puntual
+            and self._reputacion_service is not None
+            and hasattr(self._reputacion_service, "premiar_entrega_puntual")
+        ):
+            self._reputacion_service.premiar_entrega_puntual(prestamo.usuario_id)
 
     def completar_entrega(
         self,

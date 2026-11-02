@@ -70,12 +70,13 @@ def crear_reserva(reserva_id, usuario_id):
 
 
 @pytest.mark.e2e
-def test_solicitar_prestamo_desde_reserva_del_usuario():
+def test_solicitar_prestamo_con_gestor_almacen_retorna_201():
 	usuario_id = uuid4()
 	reserva_id = uuid4()
+	gestor_id = uuid4()
 	service = FakeReservaService(crear_reserva(reserva_id, usuario_id))
 	app.dependency_overrides[obtener_servicio] = lambda: service
-	app.dependency_overrides[get_current_user] = lambda: crear_usuario(usuario_id)
+	app.dependency_overrides[get_current_user] = lambda: crear_usuario(gestor_id, RolUsuario.GESTOR_ALMACEN)
 
 	response = client.post(f"/reservas/{reserva_id}/prestamo")
 
@@ -85,14 +86,30 @@ def test_solicitar_prestamo_desde_reserva_del_usuario():
 
 
 @pytest.mark.e2e
+def test_solicitar_prestamo_rechaza_estudiante_con_403():
+	usuario_id = uuid4()
+	reserva_id = uuid4()
+	service = FakeReservaService(crear_reserva(reserva_id, usuario_id))
+	app.dependency_overrides[obtener_servicio] = lambda: service
+	app.dependency_overrides[get_current_user] = lambda: crear_usuario(usuario_id, RolUsuario.ESTUDIANTE)
+
+	response = client.post(f"/reservas/{reserva_id}/prestamo")
+
+	assert response.status_code == 403
+	assert response.json()["detail"] == "solo el personal de gestión puede iniciar préstamos"
+	assert service.solicitud_realizada is False
+
+
+@pytest.mark.e2e
 def test_solicitar_prestamo_rechaza_reserva_de_otro_usuario():
 	service = FakeReservaService(crear_reserva(uuid4(), uuid4()))
 	app.dependency_overrides[obtener_servicio] = lambda: service
-	app.dependency_overrides[get_current_user] = lambda: crear_usuario(uuid4())
+	app.dependency_overrides[get_current_user] = lambda: crear_usuario(uuid4(), RolUsuario.ESTUDIANTE)
 
 	response = client.post(f"/reservas/{service.reserva.id}/prestamo")
 
 	assert response.status_code == 403
+	assert response.json()["detail"] == "solo el personal de gestión puede iniciar préstamos"
 	assert service.solicitud_realizada is False
 
 

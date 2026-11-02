@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -329,14 +329,20 @@ def test_prioridad_puntaje_por_defecto():
 # --- Tests ReservaService ---
 
 
+def _horario_futuro(horas_inicio: float = 24, duracion_horas: float = 2):
+    inicio = datetime.now(timezone.utc) + timedelta(hours=horas_inicio)
+    return inicio, inicio + timedelta(hours=duracion_horas)
+
+
 def test_crear_reserva_horario_libre_confirma_automaticamente():
     repo = FakeReservaRepository()
     service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()))
+    inicio, fin = _horario_futuro()
     datos = CrearReservaDTO(
         usuario_id=uuid4(),
         recurso_id=uuid4(),
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
 
     reserva_dto = service.crear_reserva(datos)
@@ -349,11 +355,12 @@ def test_crear_reserva_horario_ocupado_otro_usuario_guarda_pendiente():
     u1 = uuid4()
     u2 = uuid4()
     recurso_id = uuid4()
+    inicio, fin = _horario_futuro()
     confirmada_existente = Reserva.crear(
         usuario_id=u1,
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     confirmada_existente.confirmar()
     repo = FakeReservaRepository(reservas=[confirmada_existente])
@@ -362,8 +369,8 @@ def test_crear_reserva_horario_ocupado_otro_usuario_guarda_pendiente():
     datos = CrearReservaDTO(
         usuario_id=u2,
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 30, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 11, 30, tzinfo=timezone.utc),
+        fecha_inicio=inicio + timedelta(minutes=30),
+        fecha_fin=inicio + timedelta(minutes=90),
     )
 
     reserva_dto = service.crear_reserva(datos)
@@ -377,11 +384,12 @@ def test_crear_reserva_horario_ocupado_otro_usuario_guarda_pendiente():
 def test_crear_reserva_mismo_usuario_duplica_lanza_error():
     u1 = uuid4()
     recurso_id = uuid4()
+    inicio, fin = _horario_futuro()
     confirmada_existente = Reserva.crear(
         usuario_id=u1,
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     confirmada_existente.confirmar()
     repo = FakeReservaRepository(reservas=[confirmada_existente])
@@ -390,8 +398,8 @@ def test_crear_reserva_mismo_usuario_duplica_lanza_error():
     datos = CrearReservaDTO(
         usuario_id=u1,
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 11, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 13, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio + timedelta(hours=1),
+        fecha_fin=fin + timedelta(hours=1),
     )
 
     with pytest.raises(ValueError, match="ya tienes una reserva activa para este recurso en ese horario"):
@@ -400,17 +408,18 @@ def test_crear_reserva_mismo_usuario_duplica_lanza_error():
 
 def test_confirmar_reserva_ignora_pendientes_y_valida_solo_confirmadas():
     recurso_id = uuid4()
+    inicio, fin = _horario_futuro()
     r_pendiente = Reserva.crear(
         usuario_id=uuid4(),
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     otra_pendiente = Reserva.crear(
         usuario_id=uuid4(),
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     repo = FakeReservaRepository(reservas=[r_pendiente, otra_pendiente])
     service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()))
@@ -422,18 +431,19 @@ def test_confirmar_reserva_ignora_pendientes_y_valida_solo_confirmadas():
 
 def test_confirmar_reserva_choca_con_otra_confirmada_lanza_error():
     recurso_id = uuid4()
+    inicio, fin = _horario_futuro()
     r_confirmada = Reserva.crear(
         usuario_id=uuid4(),
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     r_confirmada.confirmar()
     r_pendiente = Reserva.crear(
         usuario_id=uuid4(),
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 11, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 13, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio + timedelta(hours=1),
+        fecha_fin=fin + timedelta(hours=1),
     )
     repo = FakeReservaRepository(reservas=[r_confirmada, r_pendiente])
     service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()))
@@ -447,26 +457,27 @@ def test_cancelar_reserva_confirmada_promueve_candidata_con_mayor_reputacion():
     u_confirmado = uuid4()
     u_bajo = uuid4()
     u_alto = uuid4()
+    inicio, fin = _horario_futuro()
 
     r_confirmada = Reserva.crear(
         usuario_id=u_confirmado,
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     r_confirmada.confirmar()
 
     r_bajo = Reserva.crear(
         usuario_id=u_bajo,
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     r_alto = Reserva.crear(
         usuario_id=u_alto,
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
 
     repo = FakeReservaRepository(reservas=[r_confirmada, r_bajo, r_alto])
@@ -481,17 +492,18 @@ def test_cancelar_reserva_confirmada_promueve_candidata_con_mayor_reputacion():
 
 def test_cancelar_reserva_pendiente_no_promueve_ninguna():
     recurso_id = uuid4()
+    inicio, fin = _horario_futuro()
     r1 = Reserva.crear(
         usuario_id=uuid4(),
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     r2 = Reserva.crear(
         usuario_id=uuid4(),
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     repo = FakeReservaRepository(reservas=[r1, r2])
     service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()))
@@ -505,18 +517,19 @@ def test_obtener_cola_espera_ordena_por_reputacion():
     recurso_id = uuid4()
     u1 = uuid4()
     u2 = uuid4()
+    inicio, fin = _horario_futuro()
 
     r1 = Reserva.crear(
         usuario_id=u1,
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
     r2 = Reserva.crear(
         usuario_id=u2,
         recurso_id=recurso_id,
-        fecha_inicio=datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc),
-        fecha_fin=datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
     )
 
     repo = FakeReservaRepository(reservas=[r1, r2])

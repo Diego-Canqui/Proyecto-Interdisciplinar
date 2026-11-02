@@ -131,6 +131,17 @@ def test_consultar_historial_con_prestamos():
     assert datos[0]["estado"] == "ACTIVO"
 
 
+def _crear_usuario(usuario_id, roles):
+    return UsuarioDTO(
+        id=usuario_id,
+        nombre="Usuario Test",
+        correo="test@example.com",
+        telefono=None,
+        roles=roles,
+        estado=True,
+    )
+
+
 @pytest.mark.e2e
 def test_ciclo_entrega_endpoints_completo():
     prestamo = Prestamo(
@@ -182,6 +193,9 @@ def test_ciclo_entrega_endpoints_completo():
     assert checklist is not None and checklist.completo
     assert garantia is not None and garantia.estado == EstadoGarantia.REGISTRADA
 
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
     devolucion = client.post(f"/prestamos/{prestamo.id}/devolucion")
     assert devolucion.status_code == 200
     assert devolucion.json() == {
@@ -204,6 +218,9 @@ def test_devolucion_prestamo_inexistente_retorna_404():
         garantia_repository=SimpleNamespace(),
     )
     app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
 
     response = client.post(f"/prestamos/{uuid4()}/devolucion")
 
@@ -211,15 +228,28 @@ def test_devolucion_prestamo_inexistente_retorna_404():
     assert response.json()["detail"] == "Préstamo no encontrado"
 
 
-def _crear_usuario(usuario_id, roles):
-    return UsuarioDTO(
-        id=usuario_id,
-        nombre="Usuario Test",
-        correo="test@example.com",
-        telefono=None,
-        roles=roles,
-        estado=True,
+@pytest.mark.e2e
+def test_devolucion_con_estudiante_retorna_403():
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
     )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.ESTUDIANTE]
+    )
+
+    response = client.post(f"/prestamos/{uuid4()}/devolucion")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.e2e
+def test_devolucion_sin_token_retorna_401():
+    response = client.post(f"/prestamos/{uuid4()}/devolucion")
+
+    assert response.status_code == 401
 
 
 @pytest.mark.e2e

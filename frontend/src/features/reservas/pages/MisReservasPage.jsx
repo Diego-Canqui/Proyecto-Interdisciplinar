@@ -416,14 +416,17 @@ export default function MisReservasPage() {
                         )}
                         {reserva.estado === "CONFIRMADA" && (
                           <>
-                            <button
-                              type="button"
-                              className="boton boton--secundario boton--sm"
-                              onClick={() => manejarIniciarPrestamo(reserva.id)}
-                              disabled={accionEnCurso}
-                            >
-                              {accionId === reserva.id ? "Iniciando..." : "Iniciar préstamo"}
-                            </button>{" "}
+                            {esGestion && (
+                              <button
+                                type="button"
+                                className="boton boton--secundario boton--sm"
+                                onClick={() => manejarIniciarPrestamo(reserva.id)}
+                                disabled={accionEnCurso}
+                              >
+                                {accionId === reserva.id ? "Iniciando..." : "Iniciar préstamo"}
+                              </button>
+                            )}
+                            {esGestion && " "}
                             <button
                               type="button"
                               className="boton boton--peligro boton--sm"

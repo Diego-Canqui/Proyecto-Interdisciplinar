@@ -186,6 +186,11 @@ def solicitar_prestamo(
     usuario: UsuarioAutenticado,
 ) -> dict[str, str]:
     """Convierte una reserva confirmada en préstamo si el recurso está disponible."""
+    if not _tiene_rol_gestion(usuario):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="solo el personal de gestión puede iniciar préstamos",
+        )
     _reserva_del_usuario(id_reserva, servicio, usuario)
     try:
         creado = servicio.convertir_a_prestamo(id_reserva)
