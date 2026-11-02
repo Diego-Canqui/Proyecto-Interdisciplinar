@@ -53,3 +53,34 @@ def test_crear_y_buscar_recurso():
     ficha_data = res_ficha.json()
     assert ficha_data["marca"] == "Epson"
     assert ficha_data["numero_serie"] == "EPSON999"
+
+    # Actualizar datos del recurso
+    res_act = client.put(
+        f"/recursos/{recurso_id}",
+        json={
+            "nombre": "Proyector Epson Pro",
+            "descripcion": "Proyector HD 4K",
+            "categoria": "Multimedia",
+            "marca": "Epson",
+            "modelo": "PowerLite 4K",
+            "numero_serie": "EPSON999",
+            "color": "Negro",
+            "estado_fisico": "Excelente",
+            "foto_url": "http://example.com/proyector2.jpg",
+        },
+    )
+    assert res_act.status_code == 200
+    assert res_act.json()["nombre"] == "Proyector Epson Pro"
+
+    # Actualizar estado a MANTENIMIENTO
+    res_est = client.patch(
+        f"/recursos/{recurso_id}/estado",
+        json={"estado": "MANTENIMIENTO"},
+    )
+    assert res_est.status_code == 200
+    assert res_est.json()["estado"] == "MANTENIMIENTO"
+
+    # Consultar disponibilidad ahora debe ser False
+    res_disp2 = client.get(f"/recursos/{recurso_id}/disponibilidad")
+    assert res_disp2.status_code == 200
+    assert res_disp2.json()["disponible"] is False
