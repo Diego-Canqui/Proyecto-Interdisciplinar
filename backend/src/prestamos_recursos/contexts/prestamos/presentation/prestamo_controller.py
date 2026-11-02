@@ -69,7 +69,7 @@ class DevolucionDTO(BaseModel):
 def iniciar_entrega(
     id_prestamo: UUID,
     data: EntregaIniciarDTO,
-    service: PrestamoService = Depends(get_prestamo_service),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     """Inicia el proceso de entrega creando garantía y checklist."""
     compromiso = CompromisoResponsabilidad(
@@ -90,7 +90,7 @@ def iniciar_entrega(
 def agregar_item_checklist(
     id_prestamo: UUID,
     data: ChecklistItemDTO,
-    service: PrestamoService = Depends(get_prestamo_service),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     try:
         service.agregar_item_checklist(id_prestamo, data.observaciones, data.fotos_urls)
@@ -103,7 +103,7 @@ def agregar_item_checklist(
 @router.post("/{id_prestamo}/entrega/confirmar")
 def confirmar_entrega(
     id_prestamo: UUID,
-    service: PrestamoService = Depends(get_prestamo_service),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     try:
         service.confirmar_entrega(id_prestamo)
@@ -116,7 +116,7 @@ def confirmar_entrega(
 @router.post("/{id_prestamo}/entrega/finalizar")
 def finalizar_entrega(
     id_prestamo: UUID,
-    service: PrestamoService = Depends(get_prestamo_service),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     try:
         service.finalizar_entrega(id_prestamo)
@@ -130,7 +130,7 @@ def finalizar_entrega(
 def completar_entrega(
     id_prestamo: UUID,
     data: EntregaCompletaDTO,
-    service: PrestamoService = Depends(get_prestamo_service),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     """Ejecuta el ciclo de entrega completo (garantía + checklist) de forma unificada."""
     compromiso = CompromisoResponsabilidad(
@@ -156,7 +156,7 @@ def completar_entrega(
 @router.get("/{id_prestamo}/inspeccion")
 def consultar_inspecciones(
     id_prestamo: UUID,
-    service: PrestamoService = Depends(get_prestamo_service),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     """Consulta los datos de garantía y checklists (inicial y retorno)."""
     return service.consultar_inspecciones(id_prestamo)
@@ -170,7 +170,10 @@ def consultar_inspecciones(
 def registrar_devolucion(
     id_prestamo: UUID,
     data: DevolucionDTO | None = None,
-    service: PrestamoService = Depends(get_prestamo_service),
+    _usuario: UsuarioDTO = Depends(  # noqa: B008
+        require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)  # noqa: B008
+    ),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     """Registra la devolución con inspección de retorno y calcula retraso/sanción."""
     obs = data.observaciones if data else "Devuelto conforme"
@@ -196,7 +199,7 @@ def registrar_devolucion(
 @router.post("/{id_prestamo}/renovar")
 def renovar_prestamo(
     id_prestamo: UUID,
-    service: PrestamoService = Depends(get_prestamo_service),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     """Renueva un préstamo activo extendiendo el plazo de devolución."""
     try:
@@ -210,7 +213,7 @@ def renovar_prestamo(
 @router.get("/usuarios/{id_usuario}/historial", response_model=list[PrestamoDTO])
 def consultar_historial(
     id_usuario: UUID,
-    service: PrestamoService = Depends(get_prestamo_service),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> list[PrestamoDTO]:
     """Consulta el historial de préstamos de un usuario."""
     return service.consultar_historial(id_usuario)

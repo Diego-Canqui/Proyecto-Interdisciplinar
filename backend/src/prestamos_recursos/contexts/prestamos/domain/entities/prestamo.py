@@ -84,11 +84,11 @@ class Prestamo(BaseEntity):
     def solicitar_prorroga(self, dias: int = 7, fecha_actual: datetime | None = None) -> bool:
         """
         Determina si el préstamo es apto para solicitar una prórroga.
-        Debe estar ACTIVO y dentro de la fecha límite.
+        Debe estar ACTIVO o ENTREGADO y dentro de la fecha límite.
         """
         if dias <= 0:
             return False
-        if self.estado != EstadoPrestamo.ACTIVO:
+        if self.estado not in (EstadoPrestamo.ACTIVO, EstadoPrestamo.ENTREGADO):
             return False
 
         fecha = _ensure_utc(fecha_actual) if fecha_actual is not None else datetime.now(UTC)

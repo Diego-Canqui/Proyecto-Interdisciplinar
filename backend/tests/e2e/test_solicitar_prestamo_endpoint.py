@@ -1,8 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import delete
 
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import UsuarioDTO
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import RolUsuario
@@ -10,8 +11,10 @@ from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies 
 	get_current_user,
 )
 from prestamos_recursos.contexts.reservas.application.dto.reserva_dto import ReservaDTO
+from prestamos_recursos.contexts.reservas.infrastructure.models.reserva_model import ReservaModel
 from prestamos_recursos.contexts.reservas.presentation.reserva_controller import obtener_servicio
 from prestamos_recursos.main import app
+from prestamos_recursos.shared.database import Base, SessionLocal, engine
 
 client = TestClient(app)
 
@@ -67,12 +70,13 @@ def crear_reserva(reserva_id, usuario_id):
 
 
 @pytest.mark.e2e
-def test_solicitar_prestamo_desde_reserva_del_usuario():
+def test_solicitar_prestamo_con_gestor_almacen_retorna_201():
 	usuario_id = uuid4()
 	reserva_id = uuid4()
+	gestor_id = uuid4()
 	service = FakeReservaService(crear_reserva(reserva_id, usuario_id))
 	app.dependency_overrides[obtener_servicio] = lambda: service
-	app.dependency_overrides[get_current_user] = lambda: crear_usuario(usuario_id)
+	app.dependency_overrides[get_current_user] = lambda: crear_usuario(gestor_id, RolUsuario.GESTOR_ALMACEN)
 
 	response = client.post(f"/reservas/{reserva_id}/prestamo")
 
@@ -82,14 +86,30 @@ def test_solicitar_prestamo_desde_reserva_del_usuario():
 
 
 @pytest.mark.e2e
+def test_solicitar_prestamo_rechaza_estudiante_con_403():
+	usuario_id = uuid4()
+	reserva_id = uuid4()
+	service = FakeReservaService(crear_reserva(reserva_id, usuario_id))
+	app.dependency_overrides[obtener_servicio] = lambda: service
+	app.dependency_overrides[get_current_user] = lambda: crear_usuario(usuario_id, RolUsuario.ESTUDIANTE)
+
+	response = client.post(f"/reservas/{reserva_id}/prestamo")
+
+	assert response.status_code == 403
+	assert response.json()["detail"] == "solo el personal de gestión puede iniciar préstamos"
+	assert service.solicitud_realizada is False
+
+
+@pytest.mark.e2e
 def test_solicitar_prestamo_rechaza_reserva_de_otro_usuario():
 	service = FakeReservaService(crear_reserva(uuid4(), uuid4()))
 	app.dependency_overrides[obtener_servicio] = lambda: service
-	app.dependency_overrides[get_current_user] = lambda: crear_usuario(uuid4())
+	app.dependency_overrides[get_current_user] = lambda: crear_usuario(uuid4(), RolUsuario.ESTUDIANTE)
 
 	response = client.post(f"/reservas/{service.reserva.id}/prestamo")
 
 	assert response.status_code == 403
+	assert response.json()["detail"] == "solo el personal de gestión puede iniciar préstamos"
 	assert service.solicitud_realizada is False
 
 
@@ -133,10 +153,11 @@ def test_confirmar_reserva_permite_titular_y_gestor_rechaza_ajeno():
 	service = FakeReservaService(reserva)
 	app.dependency_overrides[obtener_servicio] = lambda: service
 
-	# Titular: 200
+	# Titular sin rol de gestión: 403
 	app.dependency_overrides[get_current_user] = lambda: crear_usuario(titular_id, RolUsuario.ESTUDIANTE)
 	res_titular = client.patch(f"/reservas/{reserva_id}/confirmar")
-	assert res_titular.status_code == 200
+	assert res_titular.status_code == 403
+	assert res_titular.json()["detail"] == "solo el personal de gestión puede confirmar reservas"
 
 	# Gestor: 200
 	app.dependency_overrides[get_current_user] = lambda: crear_usuario(gestor_id, RolUsuario.GESTOR_ALMACEN)
@@ -147,6 +168,7 @@ def test_confirmar_reserva_permite_titular_y_gestor_rechaza_ajeno():
 	app.dependency_overrides[get_current_user] = lambda: crear_usuario(otro_id, RolUsuario.ESTUDIANTE)
 	res_otro = client.patch(f"/reservas/{reserva_id}/confirmar")
 	assert res_otro.status_code == 403
+	assert res_otro.json()["detail"] == "solo el personal de gestión puede confirmar reservas"
 
 
 @pytest.mark.e2e
@@ -190,3 +212,67 @@ def test_solicitar_prestamo_permite_gestor_almacen_en_reserva_ajena():
 	assert response.status_code == 201
 	assert response.json() == {"detalle": "Préstamo creado desde la reserva"}
 	assert service.solicitud_realizada is True
+
+
+@pytest.mark.e2e
+def test_flujo_e2e_reserva_espera_y_promocion():
+	Base.metadata.create_all(bind=engine)
+	with SessionLocal() as session:
+		session.execute(delete(ReservaModel))
+		session.commit()
+
+	u1_id = uuid4()
+	u2_id = uuid4()
+	recurso_id = str(uuid4())
+
+	u1 = crear_usuario(u1_id, RolUsuario.ESTUDIANTE)
+	u2 = crear_usuario(u2_id, RolUsuario.ESTUDIANTE)
+
+	inicio = (datetime.now(UTC) + timedelta(hours=5)).isoformat()
+	fin = (datetime.now(UTC) + timedelta(hours=7)).isoformat()
+
+	# 1. Usuario 1 reserva en horario libre -> 201 CONFIRMADA
+	app.dependency_overrides[get_current_user] = lambda: u1
+	datos_u1 = {
+		"usuario_id": str(u1_id),
+		"recurso_id": recurso_id,
+		"fecha_inicio": inicio,
+		"fecha_fin": fin,
+	}
+	resp1 = client.post("/reservas", json=datos_u1)
+	assert resp1.status_code == 201
+	reserva1 = resp1.json()
+	assert reserva1["estado"] == "CONFIRMADA"
+
+	# 2. Usuario 2 reserva mismo horario -> 201 PENDIENTE
+	app.dependency_overrides[get_current_user] = lambda: u2
+	datos_u2 = {
+		"usuario_id": str(u2_id),
+		"recurso_id": recurso_id,
+		"fecha_inicio": inicio,
+		"fecha_fin": fin,
+	}
+	resp2 = client.post("/reservas", json=datos_u2)
+	assert resp2.status_code == 201
+	reserva2 = resp2.json()
+	assert reserva2["estado"] == "PENDIENTE"
+
+	# 3. Usuario 2 intenta reservar de nuevo mismo horario -> 409
+	resp_duplicada = client.post("/reservas", json=datos_u2)
+	assert resp_duplicada.status_code == 409
+	assert resp_duplicada.json()["detail"] == (
+		"ya tienes una reserva activa para este recurso en ese horario"
+	)
+
+	# 4. Usuario 1 cancela su reserva confirmada -> 200 CANCELADA
+	app.dependency_overrides[get_current_user] = lambda: u1
+	cancelar_resp = client.patch(f"/reservas/{reserva1['id']}/cancelar")
+	assert cancelar_resp.status_code == 200
+	assert cancelar_resp.json()["estado"] == "CANCELADA"
+
+	# 5. Reserva de Usuario 2 es promovida automáticamente a CONFIRMADA
+	app.dependency_overrides[get_current_user] = lambda: u2
+	consulta_resp = client.get(f"/reservas/{reserva2['id']}")
+	assert consulta_resp.status_code == 200
+	assert consulta_resp.json()["estado"] == "CONFIRMADA"
+
