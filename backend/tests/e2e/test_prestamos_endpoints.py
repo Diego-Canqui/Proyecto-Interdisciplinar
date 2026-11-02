@@ -313,3 +313,28 @@ def test_listar_todos_prestamos_sin_token_retorna_401():
     assert response.status_code == 401
 
 
+@pytest.mark.e2e
+def test_renovar_prestamo_activo():
+    ahora = datetime.now(UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=5),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    repo = FakePrestamoRepository([prestamo])
+    service = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    response = client.post(f"/prestamos/{prestamo.id}/renovar")
+    assert response.status_code == 200
+    assert "renovado exitosamente" in response.json()["detalle"]
+    assert prestamo.fecha_fin > ahora + timedelta(days=10)
+
+

@@ -6,6 +6,7 @@ import {
   consultarHistorial,
   listarTodosPrestamos,
   registrarDevolucion,
+  renovarPrestamo,
 } from "../api.js";
 
 const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
@@ -37,7 +38,7 @@ function mensajeError(error) {
   if (error?.status === 403) return "No tienes permiso para realizar esta acción.";
   if (error?.status === 404) return "El préstamo no fue encontrado.";
   if (error?.status === 409) {
-    return error.message || "El préstamo no se puede devolver en su estado actual.";
+    return error.message || "El préstamo no se puede operar en su estado actual.";
   }
   return error?.message || "Ocurrió un error. Inténtalo de nuevo.";
 }
@@ -49,6 +50,8 @@ export default function HistorialPage() {
   const [usuarios, setUsuarios] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [devolviendoId, setDevolviendoId] = useState("");
+  const [renovandoId, setRenovandoId] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("TODOS");
   const [error, setError] = useState("");
   const [exito, setExito] = useState("");
 
@@ -63,6 +66,14 @@ export default function HistorialPage() {
     () => new Map(usuarios.map((u) => [u.id, u])),
     [usuarios]
   );
+
+  const prestamosFiltrados = useMemo(() => {
+    if (filtroEstado === "TODOS") return prestamos;
+    if (filtroEstado === "ACTIVOS") {
+      return prestamos.filter((p) => p.estado === "ACTIVO" || p.estado === "ENTREGADO");
+    }
+    return prestamos.filter((p) => p.estado === filtroEstado);
+  }, [prestamos, filtroEstado]);
 
   const cargarListaPrestamos = async (perfilActual) => {
     const esRolGestion = Boolean(
@@ -128,15 +139,30 @@ export default function HistorialPage() {
     try {
       const res = await registrarDevolucion(idPrestamo);
       if (typeof res?.dias_retraso === "number" && res.dias_retraso > 0) {
-        setExito(`Devolución registrada con ${res.dias_retraso} día(s) de retraso.`);
+        setExito(`Devolución registrada con ${res.dias_retraso} día(s) de retraso. Se aplicó la sanción por tardanza.`);
       } else {
-        setExito("Devolución registrada a tiempo. El recurso ya está disponible.");
+        setExito("Devolución registrada a tiempo. El recurso ya está disponible y se premió la puntualidad.");
       }
       await cargarListaPrestamos(usuario);
     } catch (errorDevolucion) {
       setError(mensajeError(errorDevolucion));
     } finally {
       setDevolviendoId("");
+    }
+  };
+
+  const manejarRenovacion = async (idPrestamo) => {
+    setError("");
+    setExito("");
+    setRenovandoId(idPrestamo);
+    try {
+      const res = await renovarPrestamo(idPrestamo);
+      setExito(res?.detalle || "Préstamo renovado exitosamente por 7 días adicionales.");
+      await cargarListaPrestamos(usuario);
+    } catch (errorRenovacion) {
+      setError(mensajeError(errorRenovacion));
+    } finally {
+      setRenovandoId("");
     }
   };
 
@@ -176,7 +202,7 @@ export default function HistorialPage() {
         <p className="pagina__subtitulo">
           {esGestion
             ? "Gestión global de todos los préstamos registrados en el sistema."
-            : "Revisa los préstamos asociados a tus reservas y registra sus devoluciones."}
+            : "Revisa los préstamos asociados a tus reservas, solicita renovaciones y registra devoluciones."}
         </p>
       </header>
 
@@ -191,17 +217,41 @@ export default function HistorialPage() {
         </p>
       )}
 
-      {prestamos.length === 0 ? (
+      {/* Barra de filtros */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.5rem" }}>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <label htmlFor="filtro-estado" style={{ fontSize: "0.9rem", fontWeight: "bold" }}>
+            Filtrar por estado:
+          </label>
+          <select
+            id="filtro-estado"
+            className="campo__control"
+            value={filtroEstado}
+            onChange={(e) => setFiltroEstado(e.target.value)}
+            style={{ padding: "0.25rem 0.5rem" }}
+          >
+            <option value="TODOS">Todos ({prestamos.length})</option>
+            <option value="ACTIVOS">Activos / En Curso</option>
+            <option value="DEVUELTO">Devueltos</option>
+            <option value="VENCIDO">Vencidos</option>
+          </select>
+        </div>
+        <span style={{ fontSize: "0.85rem", color: "var(--texto-secundario, #64748b)" }}>
+          Mostrando {prestamosFiltrados.length} préstamo(s)
+        </span>
+      </div>
+
+      {prestamosFiltrados.length === 0 ? (
         <div className="estado-vacio">
-          <p className="estado-vacio__titulo">Todavía no hay préstamos registrados</p>
-          <p>No se encontraron préstamos activos ni devueltos en el historial.</p>
+          <p className="estado-vacio__titulo">No hay préstamos con este criterio</p>
+          <p>No se encontraron préstamos registrados para el filtro seleccionado.</p>
           <Link className="boton boton--secundario" to="/reservas">
             Ir a reservas
           </Link>
         </div>
       ) : (
         <div className="tabla__contenedor">
-          <table className="tabla tabla--apilada">
+          <table className="tabla">
             <thead>
               <tr>
                 <th>Recurso</th>
@@ -213,7 +263,7 @@ export default function HistorialPage() {
               </tr>
             </thead>
             <tbody>
-              {prestamos.map((prestamo) => {
+              {prestamosFiltrados.map((prestamo) => {
                 const recurso = recursosPorId.get(prestamo.recurso_id);
                 const nombreRecurso = recurso?.nombre || "Recurso del catálogo";
                 const usuarioObj = usuariosPorId.get(prestamo.usuario_id);
@@ -221,11 +271,20 @@ export default function HistorialPage() {
                   ? `${usuarioObj.nombre} (${usuarioObj.correo})`
                   : prestamo.usuario_id;
                 const puedeDevolver = ESTADOS_ACCION_DEVOLUCION.has(prestamo.estado);
+                const puedeRenovar = prestamo.estado === "ACTIVO";
                 const estaDevolviendo = devolviendoId === prestamo.id;
+                const estaRenovando = renovandoId === prestamo.id;
 
                 return (
                   <tr key={prestamo.id}>
-                    <td data-etiqueta="Recurso">{nombreRecurso}</td>
+                    <td data-etiqueta="Recurso">
+                      <strong>{nombreRecurso}</strong>
+                      {recurso?.categoria && (
+                        <div style={{ fontSize: "0.8rem", color: "var(--texto-secundario, #64748b)" }}>
+                          {recurso.categoria}
+                        </div>
+                      )}
+                    </td>
                     {esGestion && <td data-etiqueta="Usuario">{nombreUsuario}</td>}
                     <td data-etiqueta="Inicio">{mostrarFecha(prestamo.fecha_inicio)}</td>
                     <td data-etiqueta="Fin">{mostrarFecha(prestamo.fecha_fin)}</td>
@@ -239,18 +298,34 @@ export default function HistorialPage() {
                       </span>
                     </td>
                     <td data-etiqueta="Acciones">
-                      {puedeDevolver ? (
-                        <button
-                          type="button"
-                          className="boton boton--secundario boton--sm"
-                          disabled={devolviendoId !== ""}
-                          onClick={() => manejarDevolucion(prestamo.id)}
-                        >
-                          {estaDevolviendo ? "Devolviendo..." : "Devolver"}
-                        </button>
-                      ) : (
-                        <span>Sin acciones</span>
-                      )}
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        {puedeRenovar && (
+                          <button
+                            type="button"
+                            className="boton boton--secundario boton--sm"
+                            disabled={renovandoId !== "" || devolviendoId !== ""}
+                            onClick={() => manejarRenovacion(prestamo.id)}
+                            title="Extender fecha límite 7 días"
+                          >
+                            {estaRenovando ? "Renovando..." : "🔄 Renovar (+7d)"}
+                          </button>
+                        )}
+                        {puedeDevolver && (
+                          <button
+                            type="button"
+                            className="boton boton--primario boton--sm"
+                            disabled={devolviendoId !== "" || renovandoId !== ""}
+                            onClick={() => manejarDevolucion(prestamo.id)}
+                          >
+                            {estaDevolviendo ? "Devolviendo..." : "📥 Devolver"}
+                          </button>
+                        )}
+                        {!puedeDevolver && !puedeRenovar && (
+                          <span style={{ fontSize: "0.85rem", color: "var(--texto-secundario, #64748b)" }}>
+                            Finalizado
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -262,4 +337,3 @@ export default function HistorialPage() {
     </section>
   );
 }
-

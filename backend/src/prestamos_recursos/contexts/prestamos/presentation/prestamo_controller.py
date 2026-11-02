@@ -133,6 +133,20 @@ def registrar_devolucion(
     }
 
 
+@router.post("/{id_prestamo}/renovar")
+def renovar_prestamo(
+    id_prestamo: UUID,
+    service: PrestamoService = Depends(get_prestamo_service),
+) -> dict:
+    """Renueva un préstamo activo extendiendo el plazo de devolución."""
+    try:
+        service.renovar_prestamo(id_prestamo)
+    except ValueError as exc:
+        status_code = 404 if str(exc) == "Préstamo no encontrado" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"detalle": "Préstamo renovado exitosamente por 7 días"}
+
+
 @router.get("/usuarios/{id_usuario}/historial", response_model=list[PrestamoDTO])
 def consultar_historial(
     id_usuario: UUID,

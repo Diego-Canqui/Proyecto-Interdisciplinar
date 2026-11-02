@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { listarUsuarios, obtenerPerfil } from "../../identidad/api.js";
 import { buscarRecursos } from "../../catalogo/api.js";
 import {
@@ -46,7 +46,9 @@ export default function MisReservasPage() {
   const [usuarios, setUsuarios] = useState([]);
   const [recursos, setRecursos] = useState([]);
   const [reservas, setReservas] = useState([]);
-  const [recursoId, setRecursoId] = useState("");
+  const [searchParams] = useSearchParams();
+  const recursoParam = searchParams.get("recursoId") || "";
+  const [recursoId, setRecursoId] = useState(recursoParam);
   const [fechaInicio, setFechaInicio] = useState("");
   const [fechaFin, setFechaFin] = useState("");
   const [cargando, setCargando] = useState(true);
