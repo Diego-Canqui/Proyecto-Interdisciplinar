@@ -47,6 +47,10 @@ class ReservaService:
         reservas = self._reserva_repository.obtener_por_usuario(id_usuario)
         return [ReservaDTO.model_validate(reserva) for reserva in reservas]
 
+    def obtener_todas(self) -> list[ReservaDTO]:
+        reservas = self._reserva_repository.obtener_todas()
+        return [ReservaDTO.model_validate(reserva) for reserva in reservas]
+
     def confirmar_reserva(self, id_reserva: UUID) -> ReservaDTO:
         reserva = self._buscar_reserva(id_reserva)
         reservas_activas = self._reserva_repository.obtener_activas_por_recurso(

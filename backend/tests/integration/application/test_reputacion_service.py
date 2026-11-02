@@ -17,6 +17,7 @@ from prestamos_recursos.contexts.identidad_reputacion.application.dto.autenticac
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
     ElegibilidadDTO,
     ExcepcionAcademicaDTO,
+    PerfilGestionDTO,
     PerfilReputacionDTO,
     SancionDTO,
 )
@@ -28,10 +29,16 @@ from prestamos_recursos.contexts.identidad_reputacion.application.excepciones im
 from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
     ReputacionService,
 )
+from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import (
+    ExcepcionAcademica,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import (
     PerfilReputacion,
 )
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.sancion import Sancion
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
+    EstadoExcepcion,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
     NivelReputacion,
 )
@@ -713,3 +720,100 @@ class TestAnularExcepcion:
         reputacion_service.anular_excepcion(excepcion.id)
 
         assert reputacion_service.es_elegible_para_prestamo(usuario_creado) is False
+
+
+@pytest.mark.integration
+class TestObtenerPerfilGestion:
+    """Tests para obtener_perfil_gestion (RF-04, D5, RNF-2): solo lectura para gestión."""
+
+    def test_obtener_perfil_gestion_usuario_sin_perfil_no_crea_perfil(
+        self, reputacion_service, perfil_repo, usuario_creado
+    ):
+        """RF-04/D5: sin perfil devuelve 500/NORMAL en memoria y no deja fila nueva."""
+        ficha = reputacion_service.obtener_perfil_gestion(usuario_creado)
+
+        assert isinstance(ficha, PerfilGestionDTO)
+        assert ficha.usuario_id == usuario_creado
+        assert ficha.puntaje == 500
+        assert ficha.nivel == NivelReputacion.NORMAL
+        assert ficha.fecha_actualizacion is None
+        assert ficha.sanciones == []
+        # La lectura no puede autocrear el perfil (RNF-2)
+        assert perfil_repo.obtener_por_usuario(usuario_creado) is None
+
+    def test_obtener_perfil_gestion_sin_perfil_devuelve_excepciones_reales(
+        self, reputacion_service, excepcion_repo, usuario_creado
+    ):
+        """RF-04: usuario sin perfil con una excepción real -> la devuelve con su estado."""
+        ahora = datetime.now(UTC)
+        excepcion = ExcepcionAcademica(
+            usuario_id=usuario_creado,
+            motivo="Examen final",
+            fecha_inicio=ahora - timedelta(days=1),
+            fecha_fin=ahora + timedelta(days=1),
+        )
+        excepcion_repo.guardar(excepcion)
+
+        ficha = reputacion_service.obtener_perfil_gestion(usuario_creado)
+
+        assert ficha.fecha_actualizacion is None
+        assert ficha.sanciones == []
+        assert len(ficha.excepciones) == 1
+        assert ficha.excepciones[0].id == excepcion.id
+        assert ficha.excepciones[0].motivo == "Examen final"
+        assert ficha.excepciones[0].activa is True
+        assert ficha.excepciones[0].estado == EstadoExcepcion.VIGENTE
+        assert ficha.excepciones[0].vigente is True
+
+    def test_obtener_perfil_gestion_con_perfil_y_sancion(
+        self, reputacion_service, usuario_creado
+    ):
+        """RF-04: con perfil sancionado, la ficha trae la sanción real y el puntaje descontado."""
+        sancion_dto = reputacion_service.aplicar_sancion(
+            usuario_creado, TipoSancion.TARDANZA, "Devolución tardía", dias_retardo=3
+        )
+
+        ficha = reputacion_service.obtener_perfil_gestion(usuario_creado)
+
+        assert ficha.puntaje == 490  # 500 - 10
+        assert ficha.nivel == NivelReputacion.NORMAL
+        assert ficha.fecha_actualizacion is not None
+        assert len(ficha.sanciones) == 1
+        assert isinstance(ficha.sanciones[0], SancionDTO)
+        assert ficha.sanciones[0].id == sancion_dto.id
+        assert ficha.sanciones[0].fecha_fin == sancion_dto.fecha_fin
+        assert ficha.sanciones[0].vigente is True
+
+    def test_obtener_perfil_gestion_usuario_inexistente(self, reputacion_service):
+        """RF-04/RF-23: un UUID no registrado lanza UsuarioNoEncontrado (la API lo traduce a 404)."""
+        with pytest.raises(UsuarioNoEncontrado):
+            reputacion_service.obtener_perfil_gestion(uuid4())
+
+    def test_obtener_perfil_gestion_no_modifica_excepciones(
+        self, reputacion_service, excepcion_repo, usuario_creado
+    ):
+        """RNF-2: la consulta no cambia el número ni el estado de las excepciones."""
+        ahora = datetime.now(UTC)
+        excepcion_vigente = ExcepcionAcademica(
+            usuario_id=usuario_creado,
+            motivo="Examen final",
+            fecha_inicio=ahora - timedelta(days=1),
+            fecha_fin=ahora + timedelta(days=1),
+        )
+        excepcion_anulada = ExcepcionAcademica(
+            usuario_id=usuario_creado,
+            motivo="Registrada por error",
+            fecha_inicio=ahora - timedelta(days=5),
+            fecha_fin=ahora + timedelta(days=5),
+            activa=False,
+        )
+        excepcion_repo.guardar(excepcion_vigente)
+        excepcion_repo.guardar(excepcion_anulada)
+        antes = excepcion_repo.obtener_por_usuario(usuario_creado)
+
+        ficha = reputacion_service.obtener_perfil_gestion(usuario_creado)
+
+        despues = excepcion_repo.obtener_por_usuario(usuario_creado)
+        assert len(ficha.excepciones) == 2
+        assert len(despues) == len(antes) == 2
+        assert {e.id: e.activa for e in despues} == {e.id: e.activa for e in antes}

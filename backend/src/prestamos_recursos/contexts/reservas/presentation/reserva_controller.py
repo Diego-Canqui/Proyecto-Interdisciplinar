@@ -12,6 +12,9 @@ from prestamos_recursos.contexts.catalogo.infrastructure.repositories import (
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
     UsuarioDTO,
 )
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import (
+    RolUsuario,
+)
 from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies import (
     get_current_user,
 )
@@ -51,6 +54,13 @@ def obtener_servicio(sesion: Annotated[Session, Depends(get_session)]) -> Reserv
 ServicioReservas = Annotated[ReservaService, Depends(obtener_servicio)]
 UsuarioAutenticado = Annotated[UsuarioDTO, Depends(get_current_user)]
 
+_ROLES_GESTION = {RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN}
+
+
+def _tiene_rol_gestion(usuario: UsuarioDTO) -> bool:
+    roles_usuario = {RolUsuario(r) for r in usuario.roles}
+    return bool(roles_usuario & _ROLES_GESTION)
+
 
 @router.post("", response_model=ReservaDTO, status_code=201)
 def solicitar_reserva(
@@ -69,13 +79,26 @@ def solicitar_reserva(
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
+@router.get("", response_model=list[ReservaDTO])
+def listar_todas_las_reservas(
+    servicio: ServicioReservas,
+    usuario: UsuarioAutenticado,
+) -> list[ReservaDTO]:
+    if not _tiene_rol_gestion(usuario):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="no tienes permisos para consultar todas las reservas",
+        )
+    return servicio.obtener_todas()
+
+
 @router.get("/usuario/{id_usuario}", response_model=list[ReservaDTO])
 def consultar_por_usuario(
     id_usuario: UUID,
     servicio: ServicioReservas,
     usuario: UsuarioAutenticado,
 ) -> list[ReservaDTO]:
-    if id_usuario != usuario.id:
+    if id_usuario != usuario.id and not _tiene_rol_gestion(usuario):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="no puedes consultar las reservas de otro usuario",
@@ -102,8 +125,7 @@ def _reserva_del_usuario(
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
-
-    if reserva.usuario_id != usuario.id:
+    if reserva.usuario_id != usuario.id and not _tiene_rol_gestion(usuario):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="no puedes acceder a una reserva de otro usuario",

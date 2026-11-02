@@ -67,3 +67,15 @@ class SqlPrestamoRepository(PrestamoRepository):
         )
         return [self._to_entity(m) for m in modelos]
 
+    def obtener_todos(self) -> list[Prestamo]:
+        modelos = (
+            self._session.scalars(
+                select(PrestamoModel).order_by(
+                    PrestamoModel.fecha_inicio.desc(), PrestamoModel.id
+                )
+            )
+            .all()
+        )
+        return [self._to_entity(m) for m in modelos]
+
+

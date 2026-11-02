@@ -114,3 +114,46 @@ def test_obtener_por_usuario():
     ids_u1 = {p.id for p in prestamos_u1}
     assert ids_u1 == {p1.id, p2.id}
 
+
+def test_obtener_todos():
+    session = make_session()
+    repo = SqlPrestamoRepository(session)
+    usuario_1 = uuid4()
+    usuario_2 = uuid4()
+
+    p1 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_1,
+        fecha_inicio=datetime(2026, 10, 10, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 15, tzinfo=UTC),
+        estado=EstadoPrestamo.DEVUELTO,
+    )
+    p2 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_2,
+        fecha_inicio=datetime(2026, 10, 20, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 25, tzinfo=UTC),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+
+    with session.begin():
+        repo.guardar(p1)
+        repo.guardar(p2)
+
+    todos = repo.obtener_todos()
+    assert len(todos) == 2
+    # Ordenados por fecha_inicio desc
+    assert todos[0].id == p2.id
+    assert todos[1].id == p1.id
+    assert {p.usuario_id for p in todos} == {usuario_1, usuario_2}
+    assert {p.estado for p in todos} == {EstadoPrestamo.ACTIVO, EstadoPrestamo.DEVUELTO}
+
+
+def test_obtener_todos_vacio():
+    session = make_session()
+    repo = SqlPrestamoRepository(session)
+    assert repo.obtener_todos() == []
+
+

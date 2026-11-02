@@ -6,6 +6,15 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
+    UsuarioDTO,
+)
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import (
+    RolUsuario,
+)
+from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies import (
+    require_roles,
+)
 from prestamos_recursos.contexts.prestamos.application.dto.prestamo_dto import PrestamoDTO
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.enums.tipo_garantia import TipoGarantia
@@ -131,4 +140,16 @@ def consultar_historial(
 ) -> list[PrestamoDTO]:
     """Consulta el historial de préstamos de un usuario."""
     return service.consultar_historial(id_usuario)
+
+
+@router.get("", response_model=list[PrestamoDTO])
+def listar_todos(
+    _usuario: UsuarioDTO = Depends(  # noqa: B008
+        require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)  # noqa: B008
+    ),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
+) -> list[PrestamoDTO]:
+    """Lista todos los préstamos registrados (solo para roles de gestión)."""
+    return service.consultar_todos()
+
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Self
 from uuid import UUID
@@ -14,6 +14,9 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_rep
     PerfilReputacion,
 )
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.sancion import Sancion
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
+    EstadoExcepcion,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
     NivelReputacion,
 )
@@ -155,5 +158,107 @@ class ResultadoAmnistiaDTO(BaseModel):
     """DTO para la respuesta de ejecutar la amnistía mensual (RF-13)."""
 
     perfiles_premiados: int  # 0 es un resultado válido: ningún perfil elegible
+
+    model_config = {"from_attributes": True}
+
+
+class ExcepcionGestionDTO(BaseModel):
+    """Excepción académica vista por un rol de gestión, con su estado derivado (RF-04)."""
+
+    id: UUID
+    motivo: str
+    fecha_inicio: datetime
+    fecha_fin: datetime
+    activa: bool
+    vigente: bool  # True solo en VIGENTE; una PROGRAMADA conserva activa=True
+    estado: EstadoExcepcion  # VIGENTE | PROGRAMADA | VENCIDA | ANULADA
+
+    @classmethod
+    def from_entity(
+        cls, excepcion: ExcepcionAcademica, ahora: datetime | None = None
+    ) -> ExcepcionGestionDTO:
+        """Deriva el estado de la excepción: ANULADA → VIGENTE → PROGRAMADA → VENCIDA."""
+        if ahora is None:
+            ahora = datetime.now(UTC)
+        elif ahora.tzinfo is None:
+            # Normalizar ahora naive a UTC para comparación (manejar naive y aware)
+            ahora = ahora.replace(tzinfo=UTC)
+
+        if not excepcion.activa:
+            estado = EstadoExcepcion.ANULADA
+        elif excepcion.es_vigente(ahora):
+            estado = EstadoExcepcion.VIGENTE
+        else:
+            inicio = excepcion.fecha_inicio
+            if inicio.tzinfo is None:
+                # Normalizar fecha a UTC para comparación (manejar naive y aware)
+                inicio = inicio.replace(tzinfo=UTC)
+            if inicio > ahora:
+                estado = EstadoExcepcion.PROGRAMADA
+            else:
+                estado = EstadoExcepcion.VENCIDA
+
+        return cls(
+            id=excepcion.id,
+            motivo=excepcion.motivo,
+            fecha_inicio=excepcion.fecha_inicio,
+            fecha_fin=excepcion.fecha_fin,
+            activa=excepcion.activa,
+            vigente=estado is EstadoExcepcion.VIGENTE,
+            estado=estado,
+        )
+
+    model_config = {"from_attributes": True}
+
+
+class PerfilGestionDTO(BaseModel):
+    """Perfil de reputación de un tercero, visto por un rol de gestión (RF-04)."""
+
+    usuario_id: UUID
+    puntaje: int
+    nivel: NivelReputacion
+    fecha_actualizacion: datetime | None  # None = el usuario no tiene perfil todavía
+    sanciones: list[SancionDTO]
+    excepciones: list[ExcepcionGestionDTO]
+
+    @classmethod
+    def from_entity(
+        cls,
+        perfil: PerfilReputacion,
+        excepciones: list[ExcepcionAcademica],
+        ahora: datetime | None = None,
+    ) -> PerfilGestionDTO:
+        """Crea la ficha de gestión desde un perfil existente y sus excepciones reales."""
+        return cls(
+            usuario_id=perfil.usuario_id,
+            puntaje=perfil.puntaje.puntos,
+            nivel=perfil.nivel,
+            fecha_actualizacion=perfil.fecha_actualizacion,
+            sanciones=[SancionDTO.from_entity(sancion) for sancion in perfil.sanciones],
+            excepciones=[
+                ExcepcionGestionDTO.from_entity(excepcion, ahora) for excepcion in excepciones
+            ],
+        )
+
+    @classmethod
+    def sin_perfil(
+        cls,
+        usuario_id: UUID,
+        excepciones: list[ExcepcionAcademica],
+        ahora: datetime | None = None,
+    ) -> PerfilGestionDTO:
+        """Estado inicial de un usuario sin perfil, en memoria y sin persistirlo (D5)."""
+        # Fuente única de 500/NORMAL: el factory del dominio, sin guardar nada
+        perfil = PerfilReputacion.crear_para_usuario(usuario_id)
+        return cls(
+            usuario_id=usuario_id,
+            puntaje=perfil.puntaje.puntos,
+            nivel=perfil.nivel,
+            fecha_actualizacion=None,
+            sanciones=[],
+            excepciones=[
+                ExcepcionGestionDTO.from_entity(excepcion, ahora) for excepcion in excepciones
+            ],
+        )
 
     model_config = {"from_attributes": True}

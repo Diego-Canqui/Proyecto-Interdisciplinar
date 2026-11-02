@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -583,6 +583,170 @@ class TestPersistenciaEntrePeticiones:
         assert len(perfil["sanciones"]) == 1
         assert perfil["sanciones"][0]["id"] == sancion_id
         assert perfil["sanciones"][0]["fecha_fin"] is not None
+
+
+@pytest.mark.e2e
+class TestReputacionPerfilGestion:
+    """Tests para GET /reputacion/usuarios/{usuario_id}/perfil (RF-04, RNF-1)."""
+
+    def test_get_perfil_gestion_admin_200(self) -> None:
+        """RF-04: con admin retorna 200 y el contrato completo de PerfilGestionDTO."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        datos_victima = _crear_usuario_ejemplo()
+        datos_victima["correo"] = "victima_ficha@example.com"
+        _, victima = _registrar_y_login(datos_victima)
+
+        # La ficha se sirve con datos reales: una sanción y una excepción vigente
+        response_sancion = client.post(
+            "/reputacion/sanciones",
+            json={
+                "usuario_id": victima["id"],
+                "tipo": "TARDANZA",
+                "motivo": "Devolución tardía de recurso",
+                "dias_retardo": 5,
+            },
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert response_sancion.status_code == 201
+
+        ahora = datetime.now(UTC)
+        response_excepcion = client.post(
+            "/reputacion/excepciones",
+            json={
+                "usuario_id": victima["id"],
+                "motivo": "Examen final",
+                "fecha_inicio": (ahora - timedelta(days=1)).isoformat(),
+                "fecha_fin": (ahora + timedelta(days=7)).isoformat(),
+            },
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert response_excepcion.status_code == 201
+
+        response = client.get(
+            f"/reputacion/usuarios/{victima['id']}/perfil",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert set(data) == {
+            "usuario_id",
+            "puntaje",
+            "nivel",
+            "fecha_actualizacion",
+            "sanciones",
+            "excepciones",
+        }
+        assert data["usuario_id"] == victima["id"]
+        assert data["puntaje"] == 490  # 500 - 10 (TARDANZA)
+        assert data["nivel"] == "NORMAL"
+        assert data["fecha_actualizacion"] is not None
+
+        assert len(data["sanciones"]) == 1
+        assert data["sanciones"][0]["fecha_fin"] is not None
+        assert data["sanciones"][0]["vigente"] is True
+
+        assert len(data["excepciones"]) == 1
+        excepcion = data["excepciones"][0]
+        assert set(excepcion) == {
+            "id",
+            "motivo",
+            "fecha_inicio",
+            "fecha_fin",
+            "activa",
+            "vigente",
+            "estado",
+        }
+        assert excepcion["motivo"] == "Examen final"
+        assert excepcion["activa"] is True
+        assert excepcion["vigente"] is True
+        assert excepcion["estado"] == "VIGENTE"
+
+    def test_get_perfil_gestion_gestor_200(self) -> None:
+        """RF-04/RF-20: con rol GESTOR_ALMACEN también retorna 200."""
+        datos_gestor = _crear_usuario_ejemplo(roles=["GESTOR_ALMACEN"])
+        token_gestor, _ = _registrar_y_login(datos_gestor)
+
+        datos_victima = _crear_usuario_ejemplo()
+        datos_victima["correo"] = "victima_ficha_gestor@example.com"
+        _, victima = _registrar_y_login(datos_victima)
+
+        response = client.get(
+            f"/reputacion/usuarios/{victima['id']}/perfil",
+            headers={"Authorization": f"Bearer {token_gestor}"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["usuario_id"] == victima["id"]
+
+    def test_get_perfil_gestion_estudiante_403(self) -> None:
+        """RNF-1: sin rol de gestión retorna 403."""
+        token_estudiante, usuario = _registrar_y_login()
+
+        response = client.get(
+            f"/reputacion/usuarios/{usuario['id']}/perfil",
+            headers={"Authorization": f"Bearer {token_estudiante}"},
+        )
+
+        assert response.status_code == 403
+
+    def test_get_perfil_gestion_sin_token_401(self) -> None:
+        """RNF-1: sin token retorna 401."""
+        response = client.get(f"/reputacion/usuarios/{uuid4()}/perfil")
+        assert response.status_code == 401
+
+    def test_get_perfil_gestion_token_expirado_401(self) -> None:
+        """RNF-1: con token expirado retorna 401."""
+        token_expirado = _crear_token(str(uuid4()), roles=["ADMINISTRADOR_SISTEMA"], expirado=True)
+
+        response = client.get(
+            f"/reputacion/usuarios/{uuid4()}/perfil",
+            headers={"Authorization": f"Bearer {token_expirado}"},
+        )
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Token inválido o expirado"
+
+    def test_get_perfil_gestion_usuario_inexistente_404(self) -> None:
+        """RF-04: un UUID que no corresponde a ningún usuario retorna 404."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        response = client.get(
+            f"/reputacion/usuarios/{uuid4()}/perfil",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+
+        assert response.status_code == 404
+
+    def test_get_perfil_gestion_dos_consultas_no_crean_perfil(self) -> None:
+        """RF-04/D5: dos consultas a un usuario sin perfil dejan fecha_actualizacion en null."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        datos_victima = _crear_usuario_ejemplo()
+        datos_victima["correo"] = "victima_sin_perfil@example.com"
+        _, victima = _registrar_y_login(datos_victima)
+
+        primera = client.get(
+            f"/reputacion/usuarios/{victima['id']}/perfil",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        segunda = client.get(
+            f"/reputacion/usuarios/{victima['id']}/perfil",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+
+        assert primera.status_code == 200
+        assert segunda.status_code == 200
+        # Si la primera consulta creara el perfil, la segunda devolvería una fecha
+        assert primera.json()["fecha_actualizacion"] is None
+        assert segunda.json()["fecha_actualizacion"] is None
+        assert segunda.json()["sanciones"] == []
+        assert segunda.json()["puntaje"] == 500
+        assert segunda.json()["nivel"] == "NORMAL"
 
 
 @pytest.mark.e2e

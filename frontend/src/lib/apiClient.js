@@ -11,14 +11,19 @@ async function request(path, options = {}) {
   });
   if (!response.ok) {
     let detail = `Error ${response.status}`;
+    // D11: se expone el `detail` del backend tal cual (string o lista de validación del 422)
+    let detalleBackend;
     try {
       const errorData = await response.json();
       detail = errorData.detail || detail;
+      detalleBackend = errorData.detail ?? undefined;
     } catch {
       // Ignore JSON parse errors, use status-based message
     }
-    const error = new Error(detail);
+    // Si el `detail` es una lista (422 de pydantic) no se pinta `[object Object]` (RF-09)
+    const error = new Error(typeof detail === "string" ? detail : "Error de validación");
     error.status = response.status;
+    error.detail = detalleBackend; // string | lista de errores de validación | undefined
     throw error;
   }
   return response.json();

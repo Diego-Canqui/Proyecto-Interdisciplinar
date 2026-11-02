@@ -291,3 +291,139 @@ class TestSqlExcepcionAcademicaRepository:
 
         assert len(vigentes) == 1
         assert vigentes[0].es_vigente() is True
+
+    def test_obtener_por_usuario_devuelve_todas(self, excepcion_repo, usuario_id):
+        """RF-04: devuelve todas las excepciones del usuario, sin filtrar por vigencia."""
+        ahora = datetime.now(UTC)
+
+        excepciones = [
+            ExcepcionAcademica(
+                id=uuid4(),
+                usuario_id=usuario_id,
+                motivo="Vigente",
+                fecha_inicio=ahora - timedelta(days=5),
+                fecha_fin=ahora + timedelta(days=5),
+                activa=True,
+            ),
+            ExcepcionAcademica(
+                id=uuid4(),
+                usuario_id=usuario_id,
+                motivo="Vencida activa",
+                fecha_inicio=ahora - timedelta(days=20),
+                fecha_fin=ahora - timedelta(days=10),
+                activa=True,
+            ),
+            ExcepcionAcademica(
+                id=uuid4(),
+                usuario_id=usuario_id,
+                motivo="Anulada",
+                fecha_inicio=ahora - timedelta(days=5),
+                fecha_fin=ahora + timedelta(days=5),
+                activa=False,
+            ),
+            ExcepcionAcademica(
+                id=uuid4(),
+                usuario_id=usuario_id,
+                motivo="Programada",
+                fecha_inicio=ahora + timedelta(days=10),
+                fecha_fin=ahora + timedelta(days=20),
+                activa=True,
+            ),
+        ]
+        for excepcion in excepciones:
+            excepcion_repo.guardar(excepcion)
+
+        obtenidas = excepcion_repo.obtener_por_usuario(usuario_id)
+
+        assert len(obtenidas) == 4
+        assert {e.id for e in obtenidas} == {e.id for e in excepciones}
+        motivos = {e.motivo for e in obtenidas}
+        assert motivos == {"Vigente", "Vencida activa", "Anulada", "Programada"}
+
+    def test_obtener_por_usuario_sin_excepciones(self, excepcion_repo, usuario_id):
+        """RF-04: un usuario sin filas devuelve lista vacía."""
+        assert excepcion_repo.obtener_por_usuario(usuario_id) == []
+
+    def test_obtener_por_usuario_orden_por_inicio_desc(self, excepcion_repo, usuario_id):
+        """RF-04: ordena por fecha de inicio descendente (la más reciente primero)."""
+        ahora = datetime.now(UTC)
+
+        mas_antigua = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=usuario_id,
+            motivo="Más antigua",
+            fecha_inicio=ahora - timedelta(days=30),
+            fecha_fin=ahora - timedelta(days=20),
+            activa=True,
+        )
+        intermedia = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=usuario_id,
+            motivo="Intermedia",
+            fecha_inicio=ahora - timedelta(days=10),
+            fecha_fin=ahora + timedelta(days=5),
+            activa=True,
+        )
+        mas_reciente = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=usuario_id,
+            motivo="Más reciente",
+            fecha_inicio=ahora + timedelta(days=10),
+            fecha_fin=ahora + timedelta(days=20),
+            activa=True,
+        )
+        # Se guardan desordenadas a propósito para comprobar que ordena la consulta
+        for excepcion in [intermedia, mas_antigua, mas_reciente]:
+            excepcion_repo.guardar(excepcion)
+
+        obtenidas = excepcion_repo.obtener_por_usuario(usuario_id)
+
+        assert [e.id for e in obtenidas] == [
+            mas_reciente.id,
+            intermedia.id,
+            mas_antigua.id,
+        ]
+
+    def test_obtener_por_usuario_no_mezcla_usuarios(
+        self, excepcion_repo, usuario_id, usuario_factory
+    ):
+        """RF-04: cada usuario recibe solo sus propias excepciones."""
+        ahora = datetime.now(UTC)
+        otro_usuario_id = usuario_factory()
+
+        propias = [
+            ExcepcionAcademica(
+                id=uuid4(),
+                usuario_id=usuario_id,
+                motivo="Propia 1",
+                fecha_inicio=ahora - timedelta(days=5),
+                fecha_fin=ahora + timedelta(days=5),
+                activa=True,
+            ),
+            ExcepcionAcademica(
+                id=uuid4(),
+                usuario_id=usuario_id,
+                motivo="Propia 2",
+                fecha_inicio=ahora - timedelta(days=15),
+                fecha_fin=ahora - timedelta(days=10),
+                activa=True,
+            ),
+        ]
+        ajena = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=otro_usuario_id,
+            motivo="Ajena",
+            fecha_inicio=ahora - timedelta(days=5),
+            fecha_fin=ahora + timedelta(days=5),
+            activa=True,
+        )
+        for excepcion in [*propias, ajena]:
+            excepcion_repo.guardar(excepcion)
+
+        del_usuario = excepcion_repo.obtener_por_usuario(usuario_id)
+        del_otro_usuario = excepcion_repo.obtener_por_usuario(otro_usuario_id)
+
+        assert len(del_usuario) == 2
+        assert {e.id for e in del_usuario} == {e.id for e in propias}
+        assert len(del_otro_usuario) == 1
+        assert del_otro_usuario[0].id == ajena.id

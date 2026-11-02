@@ -28,6 +28,9 @@ class FakePrestamoRepository:
     def obtener_por_id(self, id_prestamo):
         return next((p for p in self.prestamos if p.id == id_prestamo), None)
 
+    def obtener_todos(self):
+        return list(self.prestamos)
+
 
 class FakeChecklistRepository:
     def __init__(self):
@@ -126,7 +129,7 @@ def test_procesar_devolucion_puntual_retorna_cero_y_premia_usuario():
         recurso_id=uuid4(),
         usuario_id=usuario_id,
         fecha_inicio=datetime(2026, 10, 20, tzinfo=UTC),
-        fecha_fin=datetime(2026, 10, 25, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 30, tzinfo=UTC),
         estado=EstadoPrestamo.ENTREGADO,
     )
     premiados = []
@@ -190,4 +193,55 @@ def test_ciclo_entrega_completo_confirma_checklist_y_premia_puntualidad():
     assert prestamo.estado == EstadoPrestamo.ENTREGADO
     assert prestamo_repository.saved == [prestamo]
     assert rewarded == [usuario_id]
+
+
+def test_consultar_todos_retorna_dtos_de_todos_los_prestamos():
+    usuario_1 = uuid4()
+    usuario_2 = uuid4()
+
+    p1 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_1,
+        fecha_inicio=datetime(2026, 10, 1, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 5, tzinfo=UTC),
+        estado=EstadoPrestamo.DEVUELTO,
+    )
+    p2 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_2,
+        fecha_inicio=datetime(2026, 10, 10, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 15, tzinfo=UTC),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+
+    repo = FakePrestamoRepository([p1, p2])
+    service = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+
+    resultado = service.consultar_todos()
+
+    assert len(resultado) == 2
+    assert all(isinstance(dto, PrestamoDTO) for dto in resultado)
+    assert {dto.id for dto in resultado} == {p1.id, p2.id}
+    assert {dto.usuario_id for dto in resultado} == {usuario_1, usuario_2}
+    assert {dto.estado for dto in resultado} == {EstadoPrestamo.DEVUELTO, EstadoPrestamo.ACTIVO}
+
+
+def test_consultar_todos_retorna_lista_vacia_cuando_no_hay_prestamos():
+    repo = FakePrestamoRepository([])
+    service = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+
+    resultado = service.consultar_todos()
+
+    assert resultado == []
+
 

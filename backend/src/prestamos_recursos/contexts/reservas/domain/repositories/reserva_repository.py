@@ -23,6 +23,11 @@ class ReservaRepository(ABC):
         ...
 
     @abstractmethod
+    def obtener_todas(self) -> list[Reserva]:
+        """Devuelve todas las reservas del sistema."""
+        ...
+
+    @abstractmethod
     def obtener_activas_por_recurso(self, id_recurso: UUID) -> list[Reserva]:
         """Devuelve las reservas pendientes o confirmadas de un recurso."""
         ...

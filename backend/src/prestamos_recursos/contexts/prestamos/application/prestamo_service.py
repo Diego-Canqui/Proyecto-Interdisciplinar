@@ -246,3 +246,8 @@ class PrestamoService:
     def consultar_historial(self, id_usuario: UUID) -> list[PrestamoDTO]:
         prestamos = self._prestamo_repository.obtener_por_usuario(id_usuario)
         return [PrestamoDTO.from_entity(p) for p in prestamos]
+
+    def consultar_todos(self) -> list[PrestamoDTO]:
+        prestamos = self._prestamo_repository.obtener_todos()
+        return [PrestamoDTO.from_entity(p) for p in prestamos]
+
