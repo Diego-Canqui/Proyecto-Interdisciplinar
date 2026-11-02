@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -138,7 +138,7 @@ def test_ciclo_entrega_endpoints_completo():
         recurso_id=uuid4(),
         usuario_id=uuid4(),
         fecha_inicio=datetime.now(UTC),
-        fecha_fin=datetime(2026, 10, 30, tzinfo=UTC),
+        fecha_fin=datetime.now(UTC) + timedelta(days=7),
         estado=EstadoPrestamo.ACTIVO,
     )
     prestamo_repository = FakePrestamoRepository([prestamo])
