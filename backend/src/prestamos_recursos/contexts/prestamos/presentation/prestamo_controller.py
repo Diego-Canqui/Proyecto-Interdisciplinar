@@ -29,7 +29,7 @@ router = APIRouter(prefix="/prestamos", tags=["Préstamos"])
 
 
 # ------------------------------------------------------------
-# DTO y endpoint para iniciar la entrega (garantía + checklist)
+# DTOs para el ciclo de entrega física (garantía + checklist)
 # ------------------------------------------------------------
 
 class EntregaIniciarDTO(BaseModel):
@@ -46,16 +46,32 @@ class ChecklistItemDTO(BaseModel):
     fotos_urls: list[str] = Field(default_factory=list)
 
 
+class EntregaCompletaDTO(BaseModel):
+    """Datos completos para realizar la entrega y checklist en una sola operación."""
+
+    tipo_garantia: TipoGarantia = TipoGarantia.CARNET_UNIVERSITARIO
+    compromiso_contenido: str = Field(min_length=1)
+    compromiso_firma_url: str = Field(min_length=1)
+    compromiso_testigo: str = Field(min_length=1)
+    observaciones_checklist: str = Field(min_length=1)
+    fotos_urls: list[str] = Field(default_factory=list)
+
+
+class DevolucionDTO(BaseModel):
+    """Datos de recepción física e inspección de retorno."""
+
+    observaciones: str = "Devuelto conforme"
+    fotos_urls: list[str] = Field(default_factory=list)
+    danos_detectados: bool = False
+
+
 @router.post("/{id_prestamo}/entrega/iniciar")
 def iniciar_entrega(
     id_prestamo: UUID,
     data: EntregaIniciarDTO,
     service: PrestamoService = Depends(get_prestamo_service),
 ) -> dict:
-    """Inicia el proceso de entrega creando garantía y checklist.
-
-    Responde con ``{"detalle": "Entrega iniciada"}``.
-    """
+    """Inicia el proceso de entrega creando garantía y checklist."""
     compromiso = CompromisoResponsabilidad(
         contenido=data.compromiso_contenido,
         fecha_firma=datetime.now(UTC),
@@ -109,20 +125,64 @@ def finalizar_entrega(
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     return {"detalle": "Entrega finalizada", "estado": "ENTREGADO"}
 
-# ------------------------------------------------------------
-# Endpoint de devolución (placeholder - sigue pendiente)
-# ------------------------------------------------------------
+
+@router.post("/{id_prestamo}/entrega/completar")
+def completar_entrega(
+    id_prestamo: UUID,
+    data: EntregaCompletaDTO,
+    service: PrestamoService = Depends(get_prestamo_service),
+) -> dict:
+    """Ejecuta el ciclo de entrega completo (garantía + checklist) de forma unificada."""
+    compromiso = CompromisoResponsabilidad(
+        contenido=data.compromiso_contenido,
+        fecha_firma=datetime.now(UTC),
+        firma_url=data.compromiso_firma_url,
+        testigo=data.compromiso_testigo,
+    )
+    try:
+        service.completar_entrega(
+            id_prestamo=id_prestamo,
+            tipo_garantia=data.tipo_garantia,
+            compromiso=compromiso,
+            observaciones_checklist=data.observaciones_checklist,
+            fotos_urls=data.fotos_urls,
+        )
+    except ValueError as exc:
+        status_code = 404 if str(exc) == "Préstamo no encontrado" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"detalle": "Entrega completada exitosamente", "estado": "ENTREGADO"}
 
 
+@router.get("/{id_prestamo}/inspeccion")
+def consultar_inspecciones(
+    id_prestamo: UUID,
+    service: PrestamoService = Depends(get_prestamo_service),
+) -> dict:
+    """Consulta los datos de garantía y checklists (inicial y retorno)."""
+    return service.consultar_inspecciones(id_prestamo)
+
+
+# ------------------------------------------------------------
+# Endpoint de devolución con checklist de recepción
+# ------------------------------------------------------------
 
 @router.post("/{id_prestamo}/devolucion")
 def registrar_devolucion(
     id_prestamo: UUID,
+    data: DevolucionDTO | None = None,
     service: PrestamoService = Depends(get_prestamo_service),
 ) -> dict:
-    """Registra la devolución del préstamo y devuelve los días de retraso."""
+    """Registra la devolución con inspección de retorno y calcula retraso/sanción."""
+    obs = data.observaciones if data else "Devuelto conforme"
+    fotos = data.fotos_urls if data else []
+    danos = data.danos_detectados if data else False
     try:
-        dias_retraso = service.procesar_devolucion(id_prestamo)
+        dias_retraso = service.procesar_devolucion(
+            id_prestamo=id_prestamo,
+            observaciones_retorno=obs,
+            fotos_urls=fotos,
+            danos_detectados=danos,
+        )
     except ValueError as exc:
         status_code = 404 if str(exc) == "Préstamo no encontrado" else 409
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
@@ -165,5 +225,3 @@ def listar_todos(
 ) -> list[PrestamoDTO]:
     """Lista todos los préstamos registrados (solo para roles de gestión)."""
     return service.consultar_todos()
-
-

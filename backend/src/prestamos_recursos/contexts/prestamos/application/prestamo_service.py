@@ -110,7 +110,6 @@ class PrestamoService:
         - Se crea un ``Checklist`` de tipo ``ESTADO_INICIAL``.
         - Ambos objetos se persisten mediante sus repositorios.
         """
-        # Obtener préstamo
         prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
         if prestamo is None:
             raise ValueError("Préstamo no encontrado")
@@ -182,7 +181,78 @@ class PrestamoService:
         prestamo.marcar_entregado()
         self._prestamo_repository.guardar(prestamo)
         if puntual and self._reputacion_service is not None:
-            self._reputacion_service.premiar_entrega_puntual(prestamo.usuario_id)
+            if hasattr(self._reputacion_service, "premiar_entrega_puntual"):
+                self._reputacion_service.premiar_entrega_puntual(prestamo.usuario_id)
+
+    def completar_entrega(
+        self,
+        id_prestamo: UUID,
+        tipo_garantia: TipoGarantia,
+        compromiso: CompromisoResponsabilidad,
+        observaciones_checklist: str,
+        fotos_urls: list[str] | None = None,
+    ) -> None:
+        """Realiza el ciclo completo de inspección y entrega en ventanilla."""
+        self.iniciar_entrega(id_prestamo, tipo_garantia, compromiso)
+        self.agregar_item_checklist(id_prestamo, observaciones_checklist, fotos_urls or [])
+        self.confirmar_entrega(id_prestamo)
+        self.finalizar_entrega(id_prestamo)
+
+    def consultar_inspecciones(self, id_prestamo: UUID) -> dict:
+        """Devuelve los registros de garantía y checklist de un préstamo."""
+        inicial = (
+            self._checklist_repository.obtener_por_prestamo_y_tipo(
+                id_prestamo, TipoChecklist.ESTADO_INICIAL
+            )
+            if hasattr(self._checklist_repository, "obtener_por_prestamo_y_tipo")
+            else None
+        )
+        retorno = (
+            self._checklist_repository.obtener_por_prestamo_y_tipo(
+                id_prestamo, TipoChecklist.ESTADO_DEVOLUCION
+            )
+            if hasattr(self._checklist_repository, "obtener_por_prestamo_y_tipo")
+            else None
+        )
+        garantia = (
+            self._garantia_repository.obtener_por_prestamo(id_prestamo)
+            if hasattr(self._garantia_repository, "obtener_por_prestamo")
+            else None
+        )
+
+        return {
+            "prestamo_id": id_prestamo,
+            "checklist_inicial": (
+                {
+                    "fecha_inspeccion": inicial.fecha_inspeccion,
+                    "observaciones": inicial.observaciones,
+                    "fotos_urls": inicial.fotos_urls,
+                    "completo": inicial.completo,
+                }
+                if inicial
+                else None
+            ),
+            "checklist_devolucion": (
+                {
+                    "fecha_inspeccion": retorno.fecha_inspeccion,
+                    "observaciones": retorno.observaciones,
+                    "fotos_urls": retorno.fotos_urls,
+                    "completo": retorno.completo,
+                }
+                if retorno
+                else None
+            ),
+            "garantia": (
+                {
+                    "tipo": garantia.tipo.value,
+                    "estado": garantia.estado.value,
+                    "fecha_registro": garantia.fecha_registro,
+                    "testigo": garantia.compromiso.testigo,
+                }
+                if garantia
+                else None
+            ),
+        }
 
     def _obtener_prestamo_activo(self, id_prestamo: UUID) -> Prestamo:
         prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
@@ -192,49 +262,70 @@ class PrestamoService:
             raise ValueError("El préstamo no está activo")
         return prestamo
 
-    def procesar_devolucion(self, id_prestamo: UUID) -> int:
-        """Procesa la devolución de un préstamo y actualiza la reputación.
-
-        - Obtiene el préstamo.
-        - Llama a `prestamo.devolver()` que devuelve los días de retraso.
-        - Si no hay retraso, premia al usuario.
-        - Si hay retraso, aplica sanción de tardanza.
-        """
+    def procesar_devolucion(
+        self,
+        id_prestamo: UUID,
+        observaciones_retorno: str = "Devuelto conforme",
+        fotos_urls: list[str] | None = None,
+        danos_detectados: bool = False,
+    ) -> int:
+        """Procesa la devolución de un préstamo con checklist de recepción y actualiza reputación."""
         prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
         if prestamo is None:
             raise ValueError("Préstamo no encontrado")
 
         dias_retraso = prestamo.devolver()
-        # Persistir cambios del préstamo
         self._prestamo_repository.guardar(prestamo)
-        if self._recurso_repository is not None:
-            self._recurso_repository.actualizar_estado(
-                prestamo.recurso_id, EstadoRecurso.DISPONIBLE
+
+        # Registrar inspección de recepción/devolución si el repositorio lo soporta
+        if hasattr(self._checklist_repository, "guardar"):
+            checklist_retorno = Checklist(
+                prestamo_id=id_prestamo,
+                tipo=TipoChecklist.ESTADO_DEVOLUCION,
+                fecha_inspeccion=datetime.now(UTC),
+                observaciones=observaciones_retorno,
+                fotos_urls=fotos_urls or [],
+                completo=True,
             )
+            self._checklist_repository.guardar(checklist_retorno)
+
+        # Liberar recurso (si hay daños, ponerlo en mantenimiento para revisión)
+        if self._recurso_repository is not None:
+            nuevo_estado = (
+                EstadoRecurso.MANTENIMIENTO if danos_detectados else EstadoRecurso.DISPONIBLE
+            )
+            self._recurso_repository.actualizar_estado(prestamo.recurso_id, nuevo_estado)
 
         if self._reputacion_service is None:
             return dias_retraso
 
-        if dias_retraso == 0:
-            self._reputacion_service.premiar_devolucion_puntual(prestamo.usuario_id)
-        else:
+        # Aplicar sanción por daño físico si fue detectado en la inspección
+        if danos_detectados and hasattr(self._reputacion_service, "aplicar_sancion"):
             self._reputacion_service.aplicar_sancion(
                 prestamo.usuario_id,
-                TipoSancion.TARDANZA,
-                motivo="Devolución tardía",
-                dias_retardo=dias_retraso,
+                TipoSancion.DANO_PARCIAL,
+                motivo=f"Daños físicos en recepción: {observaciones_retorno}",
             )
+
+        # Penalización o premio por puntualidad
+        if dias_retraso == 0:
+            if not danos_detectados and hasattr(self._reputacion_service, "premiar_devolucion_puntual"):
+                self._reputacion_service.premiar_devolucion_puntual(prestamo.usuario_id)
+        else:
+            if hasattr(self._reputacion_service, "aplicar_sancion"):
+                self._reputacion_service.aplicar_sancion(
+                    prestamo.usuario_id,
+                    TipoSancion.TARDANZA,
+                    motivo="Devolución tardía",
+                    dias_retardo=dias_retraso,
+                )
         return dias_retraso
 
     def renovar_prestamo(self, id_prestamo: UUID) -> bool:
-        """Renueva un préstamo activo extendiendo su fecha de fin.
-
-        Por ahora, extiende 7 días. Se puede parametrizar según requerimientos.
-        """
+        """Renueva un préstamo activo extendiendo su fecha de fin por 7 días."""
         prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
         if prestamo is None:
             raise ValueError("Préstamo no encontrado")
-        # Extender 7 días como ejemplo
         prestamo.renovar(dias=7)
         self._prestamo_repository.guardar(prestamo)
         return True
@@ -250,4 +341,3 @@ class PrestamoService:
     def consultar_todos(self) -> list[PrestamoDTO]:
         prestamos = self._prestamo_repository.obtener_todos()
         return [PrestamoDTO.from_entity(p) for p in prestamos]
-

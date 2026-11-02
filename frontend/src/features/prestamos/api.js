@@ -1,7 +1,9 @@
 import { apiClient } from "../../lib/apiClient.js";
 
-export const registrarDevolucion = (idPrestamo) =>
-  apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/devolucion`);
+export const registrarDevolucion = (idPrestamo, datosDevolucion = null) =>
+  datosDevolucion
+    ? apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/devolucion`, datosDevolucion)
+    : apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/devolucion`);
 
 export const consultarHistorial = (idUsuario) =>
   apiClient.get(`/prestamos/usuarios/${encodeURIComponent(idUsuario)}/historial`);
@@ -22,3 +24,9 @@ export const confirmarEntrega = (idPrestamo) =>
 
 export const finalizarEntrega = (idPrestamo) =>
   apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/entrega/finalizar`);
+
+export const completarEntrega = (idPrestamo, datosCompletos) =>
+  apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/entrega/completar`, datosCompletos);
+
+export const consultarInspeccion = (idPrestamo) =>
+  apiClient.get(`/prestamos/${encodeURIComponent(idPrestamo)}/inspeccion`);
