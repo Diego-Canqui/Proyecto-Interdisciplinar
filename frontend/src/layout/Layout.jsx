@@ -9,7 +9,7 @@ const ENLACES = [
   { a: "/recursos", texto: "Recursos" },
   { a: "/reservas", texto: "Reservas" },
   { a: "/historial", texto: "Historial" },
-  { a: "/reputacion", texto: "Reputación" },
+  { a: "/reputacion", texto: "Reputación", soloSolicitante: true },
   { a: "/usuarios", texto: "Usuarios", soloGestion: true },
   { a: "/gestion-reputacion", texto: "Gestión de reputación", soloGestion: true },
 ];
@@ -44,7 +44,9 @@ export default function Layout() {
   const roles = leerRoles(); // única lectura del token (P2)
   const haySesion = roles.length > 0; // RF-03
   const esGestion = roles.some((rol) => ROLES_GESTION.includes(rol));
-  const enlaces = ENLACES.filter((e) => !e.soloGestion || esGestion); // RF-02
+  const enlaces = ENLACES.filter(
+    (e) => (!e.soloGestion || esGestion) && (!e.soloSolicitante || !esGestion)
+  ); // RF-02
 
   const cerrarSesion = async () => {
     try {

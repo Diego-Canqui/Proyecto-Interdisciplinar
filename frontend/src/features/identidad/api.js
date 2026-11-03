@@ -148,3 +148,35 @@ export async function obtenerPerfilGestion(usuarioId) {
   const response = await apiClient.get(`/reputacion/usuarios/${usuarioId}/perfil`);
   return response;
 }
+
+/**
+ * Cambia el rol de un usuario (solo ADMINISTRADOR_SISTEMA, RF-10).
+ * @param {string} idUsuario - UUID del usuario
+ * @param {string} rol - Nuevo rol asignado
+ * @returns {Promise<object>} UsuarioDTO actualizado
+ */
+export async function cambiarRolUsuario(idUsuario, rol) {
+  const response = await apiClient.patch(`/usuarios/${encodeURIComponent(idUsuario)}/rol`, { rol });
+  return response;
+}
+
+/**
+ * Cambia el estado de activación de un usuario (solo ADMINISTRADOR_SISTEMA, RF-11).
+ * @param {string} idUsuario - UUID del usuario
+ * @param {boolean} estado - true para activo, false para inactivo
+ * @returns {Promise<object>} UsuarioDTO actualizado
+ */
+export async function cambiarEstadoUsuario(idUsuario, estado) {
+  const response = await apiClient.patch(`/usuarios/${encodeURIComponent(idUsuario)}/estado`, { estado });
+  return response;
+}
+
+/**
+ * Elimina un usuario sin operaciones activas (solo ADMINISTRADOR_SISTEMA, RF-12).
+ * @param {string} idUsuario - UUID del usuario
+ * @returns {Promise<object>} Detalle de confirmación
+ */
+export async function eliminarUsuario(idUsuario) {
+  const response = await apiClient.delete(`/usuarios/${encodeURIComponent(idUsuario)}`);
+  return response;
+}

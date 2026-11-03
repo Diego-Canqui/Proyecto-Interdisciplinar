@@ -197,6 +197,27 @@ class TestAuthLogin:
         assert response.status_code == 401
         assert response.json()["detail"] == "Credenciales inválidas"
 
+    def test_post_auth_login_usuario_desactivado_403(self) -> None:
+        """RF-11: Login de un usuario con cuenta inactiva retorna 403."""
+        from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.usuario_model import (
+            UsuarioModel,
+        )
+        from prestamos_recursos.shared.database import SessionLocal
+
+        datos_registro = _crear_usuario_ejemplo()
+        client.post("/auth/registro", json=datos_registro)
+
+        with SessionLocal() as session:
+            usuario = session.query(UsuarioModel).filter_by(correo="juan@example.com").first()
+            usuario.estado = False
+            session.commit()
+
+        datos_login = {"correo": "juan@example.com", "password": "Password123"}
+        response = client.post("/auth/login", json=datos_login)
+        assert response.status_code == 403
+        assert response.json()["detail"] == "La cuenta de usuario está desactivada"
+
+
 
 @pytest.mark.e2e
 class TestAuthLogout:
@@ -282,3 +303,26 @@ class TestAuthPerfil:
 
         assert response.status_code == 401
         assert response.json()["detail"] == "Token inválido o expirado"
+
+    def test_get_auth_perfil_usuario_desactivado_con_token_anterior_403(self) -> None:
+        """RF-11: Token de usuario desactivado posteriormente retorna 403."""
+        from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.usuario_model import (
+            UsuarioModel,
+        )
+        from prestamos_recursos.shared.database import SessionLocal
+
+        datos_registro = _crear_usuario_ejemplo()
+        client.post("/auth/registro", json=datos_registro)
+
+        datos_login = {"correo": "juan@example.com", "password": "Password123"}
+        response_login = client.post("/auth/login", json=datos_login)
+        token = response_login.json()["token"]
+
+        with SessionLocal() as session:
+            usuario = session.query(UsuarioModel).filter_by(correo="juan@example.com").first()
+            usuario.estado = False
+            session.commit()
+
+        response = client.get("/auth/perfil", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 403
+        assert response.json()["detail"] == "La cuenta de usuario está desactivada"

@@ -8,9 +8,14 @@ from sqlalchemy import delete
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
     UsuarioDTO,
 )
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
+    NivelReputacion,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import RolUsuario
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_sancion import TipoSancion
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.perfil_reputacion_model import (
     PerfilReputacionModel,
+    SancionModel,
 )
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.usuario_model import (
     UsuarioModel,
@@ -50,10 +55,45 @@ USUARIO_GESTOR = UsuarioDTO(
 def cliente():
     app.dependency_overrides[get_current_user] = lambda: USUARIO_PRUEBA
     Base.metadata.create_all(bind=engine)
+    with SessionLocal() as session:
+        session.execute(delete(ReservaModel))
+        # Asegurar ID_USUARIO_PRUEBA registrado con nivel EXCELENTE (límite 5)
+        usuario = session.get(UsuarioModel, ID_USUARIO_PRUEBA)
+        if usuario is None:
+            otro = session.query(UsuarioModel).filter(UsuarioModel.correo == "reservas@test.com").first()
+            if otro is not None:
+                session.delete(otro)
+                session.flush()
+            usuario = UsuarioModel(
+                id=ID_USUARIO_PRUEBA,
+                nombre="Usuario de prueba",
+                correo="reservas@test.com",
+                password_hash="hash",
+                estado=True,
+                roles=["ESTUDIANTE"],
+            )
+            session.add(usuario)
+            session.flush()
+
+        perfil = (
+            session.query(PerfilReputacionModel)
+            .filter(PerfilReputacionModel.usuario_id == ID_USUARIO_PRUEBA)
+            .first()
+        )
+        if perfil is None:
+            perfil = PerfilReputacionModel(
+                id=uuid4(),
+                usuario_id=ID_USUARIO_PRUEBA,
+                puntos=850,
+                nivel=NivelReputacion.EXCELENTE,
+                fecha_actualizacion=datetime.now(UTC),
+            )
+            session.add(perfil)
+        else:
+            perfil.puntos = 850
+            perfil.nivel = NivelReputacion.EXCELENTE
+        session.commit()
     with TestClient(app) as client:
-        with SessionLocal() as session:
-            session.execute(delete(ReservaModel))
-            session.commit()
         try:
             yield client
         finally:
@@ -295,13 +335,6 @@ def test_cola_ordenada_por_reputacion(cliente):
             )
         )
         session.add(
-            PerfilReputacionModel(
-                id=uuid4(),
-                usuario_id=u_bajo_id,
-                puntos=300,
-            )
-        )
-        session.add(
             UsuarioModel(
                 id=u_alto_id,
                 nombre="Alto",
@@ -309,6 +342,14 @@ def test_cola_ordenada_por_reputacion(cliente):
                 password_hash="hash",
                 estado=True,
                 roles=["ESTUDIANTE"],
+            )
+        )
+        session.flush()
+        session.add(
+            PerfilReputacionModel(
+                id=uuid4(),
+                usuario_id=u_bajo_id,
+                puntos=300,
             )
         )
         session.add(
@@ -369,11 +410,6 @@ def test_cancelar_confirmada_promueve_reserva_pendiente_mas_prioritaria(cliente)
                 estado=True,
                 roles=["ESTUDIANTE"],
             ),
-            PerfilReputacionModel(
-                id=uuid4(),
-                usuario_id=u_bajo_id,
-                puntos=350,
-            ),
             UsuarioModel(
                 id=u_alto_id,
                 nombre="Alto2",
@@ -381,6 +417,14 @@ def test_cancelar_confirmada_promueve_reserva_pendiente_mas_prioritaria(cliente)
                 password_hash="hash",
                 estado=True,
                 roles=["ESTUDIANTE"],
+            ),
+        ])
+        session.flush()
+        session.add_all([
+            PerfilReputacionModel(
+                id=uuid4(),
+                usuario_id=u_bajo_id,
+                puntos=350,
             ),
             PerfilReputacionModel(
                 id=uuid4(),
@@ -424,4 +468,214 @@ def test_cancelar_confirmada_promueve_reserva_pendiente_mas_prioritaria(cliente)
         reserva_bajo = session.get(ReservaModel, id_bajo)
         assert reserva_alto.estado == EstadoReserva.CONFIRMADA
         assert reserva_bajo.estado == EstadoReserva.PENDIENTE
+
+
+def test_rechazo_403_gestor_o_admin_solicitar_reserva(cliente):
+    # Gestor de almacén no puede solicitar reservas
+    app.dependency_overrides[get_current_user] = lambda: USUARIO_GESTOR
+    resp_gestor = cliente.post("/reservas", json=datos_reserva() | {"usuario_id": str(ID_GESTOR_PRUEBA)})
+    assert resp_gestor.status_code == 403
+    assert resp_gestor.json()["detail"] == (
+        "las cuentas de gestión y administración no pueden solicitar reservas para sí mismas"
+    )
+
+    # Administrador del sistema tampoco puede
+    id_admin = uuid4()
+    usuario_admin = UsuarioDTO(
+        id=id_admin,
+        nombre="Admin",
+        correo="admin@test.com",
+        telefono=None,
+        roles=[RolUsuario.ADMINISTRADOR_SISTEMA],
+        estado=True,
+    )
+    app.dependency_overrides[get_current_user] = lambda: usuario_admin
+    resp_admin = cliente.post("/reservas", json=datos_reserva() | {"usuario_id": str(id_admin)})
+    assert resp_admin.status_code == 403
+    assert resp_admin.json()["detail"] == (
+        "las cuentas de gestión y administración no pueden solicitar reservas para sí mismas"
+    )
+
+
+def test_rechazo_duracion_mayor_a_7_dias_y_exito_exacto_7_dias(cliente):
+    inicio = datetime.now(UTC) + timedelta(hours=2)
+    # 8 días: supera límite 7 días -> 409
+    datos_8_dias = {
+        "usuario_id": str(ID_USUARIO_PRUEBA),
+        "recurso_id": str(uuid4()),
+        "fecha_inicio": inicio.isoformat(),
+        "fecha_fin": (inicio + timedelta(days=8)).isoformat(),
+    }
+    resp = cliente.post("/reservas", json=datos_8_dias)
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "la duración máxima de una reserva es de 7 días"
+
+    # Exactamente 7 días -> 201
+    datos_7_dias = {
+        "usuario_id": str(ID_USUARIO_PRUEBA),
+        "recurso_id": str(uuid4()),
+        "fecha_inicio": inicio.isoformat(),
+        "fecha_fin": (inicio + timedelta(days=7)).isoformat(),
+    }
+    resp_ok = cliente.post("/reservas", json=datos_7_dias)
+    assert resp_ok.status_code == 201
+
+
+def test_rechazo_por_sancion_vigente_en_solicitud_confirmacion_y_prestamo(cliente):
+    u_sancionado_id = uuid4()
+    p_id = uuid4()
+    ahora = datetime.now(UTC)
+
+    with SessionLocal() as session:
+        session.add(
+            UsuarioModel(
+                id=u_sancionado_id,
+                nombre="Sancionado",
+                correo=f"sanc_{uuid4()}@test.com",
+                password_hash="hash",
+                estado=True,
+                roles=["ESTUDIANTE"],
+            )
+        )
+        session.flush()
+        perfil = PerfilReputacionModel(
+            id=p_id,
+            usuario_id=u_sancionado_id,
+            puntos=400,
+            nivel=NivelReputacion.NORMAL,
+        )
+        session.add(perfil)
+        session.flush()
+        sancion = SancionModel(
+            id=uuid4(),
+            perfil_reputacion_id=p_id,
+            tipo=TipoSancion.DANO_PARCIAL,
+            puntos_descuento=-100,
+            monto_descuento=0,
+            motivo="Daño en equipo",
+            fecha_aplicacion=ahora,
+            fecha_fin=ahora + timedelta(days=10),
+            activa=True,
+        )
+        session.add(sancion)
+        session.commit()
+
+    u_sancionado_dto = UsuarioDTO(
+        id=u_sancionado_id,
+        nombre="Sancionado",
+        correo="sancionado@test.com",
+        telefono=None,
+        roles=[RolUsuario.ESTUDIANTE],
+        estado=True,
+    )
+
+    # 1. Solicitar reserva con usuario sancionado -> 409
+    app.dependency_overrides[get_current_user] = lambda: u_sancionado_dto
+    datos = {
+        "usuario_id": str(u_sancionado_id),
+        "recurso_id": str(uuid4()),
+        "fecha_inicio": (ahora + timedelta(hours=2)).isoformat(),
+        "fecha_fin": (ahora + timedelta(hours=4)).isoformat(),
+    }
+    resp_crear = cliente.post("/reservas", json=datos)
+    assert resp_crear.status_code == 409
+    assert "sanción vigente" in resp_crear.json()["detail"]
+
+    # 2. Confirmar reserva de usuario sancionado -> 409
+    reserva_pendiente_id = uuid4()
+    with SessionLocal() as session:
+        session.add(
+            ReservaModel(
+                id=reserva_pendiente_id,
+                usuario_id=u_sancionado_id,
+                recurso_id=uuid4(),
+                fecha_inicio=ahora + timedelta(hours=5),
+                fecha_fin=ahora + timedelta(hours=7),
+                estado=EstadoReserva.PENDIENTE,
+            )
+        )
+        session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: USUARIO_GESTOR
+    resp_conf = cliente.patch(f"/reservas/{reserva_pendiente_id}/confirmar")
+    assert resp_conf.status_code == 409
+    assert "sanción vigente" in resp_conf.json()["detail"]
+
+    # 3. Convertir a préstamo reserva confirmada de usuario sancionado -> 409
+    reserva_confirmada_id = uuid4()
+    with SessionLocal() as session:
+        session.add(
+            ReservaModel(
+                id=reserva_confirmada_id,
+                usuario_id=u_sancionado_id,
+                recurso_id=uuid4(),
+                fecha_inicio=ahora + timedelta(hours=10),
+                fecha_fin=ahora + timedelta(hours=12),
+                estado=EstadoReserva.CONFIRMADA,
+            )
+        )
+        session.commit()
+
+    resp_prestamo = cliente.post(f"/reservas/{reserva_confirmada_id}/prestamo")
+    assert resp_prestamo.status_code == 409
+    assert "sanción vigente" in resp_prestamo.json()["detail"]
+
+
+def test_rechazo_limite_operaciones_simultaneas_segun_nivel(cliente):
+    # Usuario con nivel BAJO (límite 1)
+    u_bajo_id = uuid4()
+    with SessionLocal() as session:
+        session.add(
+            UsuarioModel(
+                id=u_bajo_id,
+                nombre="Usuario Bajo",
+                correo=f"bajo_{uuid4()}@test.com",
+                password_hash="hash",
+                estado=True,
+                roles=["ESTUDIANTE"],
+            )
+        )
+        session.flush()
+        session.add(
+            PerfilReputacionModel(
+                id=uuid4(),
+                usuario_id=u_bajo_id,
+                puntos=200,
+                nivel=NivelReputacion.BAJO,
+            )
+        )
+        session.commit()
+
+    u_bajo_dto = UsuarioDTO(
+        id=u_bajo_id,
+        nombre="Usuario Bajo",
+        correo="bajo@test.com",
+        telefono=None,
+        roles=[RolUsuario.ESTUDIANTE],
+        estado=True,
+    )
+    app.dependency_overrides[get_current_user] = lambda: u_bajo_dto
+
+    ahora = datetime.now(UTC)
+    # Primera reserva -> 201
+    datos1 = {
+        "usuario_id": str(u_bajo_id),
+        "recurso_id": str(uuid4()),
+        "fecha_inicio": (ahora + timedelta(hours=2)).isoformat(),
+        "fecha_fin": (ahora + timedelta(hours=3)).isoformat(),
+    }
+    resp1 = cliente.post("/reservas", json=datos1)
+    assert resp1.status_code == 201
+
+    # Segunda reserva activa -> 409 (límite 1 alcanzado)
+    datos2 = {
+        "usuario_id": str(u_bajo_id),
+        "recurso_id": str(uuid4()),
+        "fecha_inicio": (ahora + timedelta(hours=5)).isoformat(),
+        "fecha_fin": (ahora + timedelta(hours=6)).isoformat(),
+    }
+    resp2 = cliente.post("/reservas", json=datos2)
+    assert resp2.status_code == 409
+    assert "límite de 1 operaciones activas simultáneas" in resp2.json()["detail"]
+
 

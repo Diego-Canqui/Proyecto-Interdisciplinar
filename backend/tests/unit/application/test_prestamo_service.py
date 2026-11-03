@@ -2,6 +2,9 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
+from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
 from prestamos_recursos.contexts.prestamos.application.dto.prestamo_dto import PrestamoDTO
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
@@ -12,6 +15,17 @@ from prestamos_recursos.contexts.prestamos.domain.enums.tipo_garantia import Tip
 from prestamos_recursos.contexts.prestamos.domain.value_objects.compromiso_responsabilidad import (
     CompromisoResponsabilidad,
 )
+
+
+class FakeRecursoRepository:
+    def __init__(self, estado_inicial: EstadoRecurso = EstadoRecurso.EN_USO) -> None:
+        self.estado = estado_inicial
+        self.actualizaciones: list[tuple] = []
+
+    def actualizar_estado(self, id_recurso, estado: EstadoRecurso) -> None:
+        self.actualizaciones.append((id_recurso, estado))
+        self.estado = estado
+
 
 
 class FakePrestamoRepository:
@@ -243,5 +257,137 @@ def test_consultar_todos_retorna_lista_vacia_cuando_no_hay_prestamos():
     resultado = service.consultar_todos()
 
     assert resultado == []
+
+
+def test_cancelar_prestamo_activo_exitoso_y_libera_recurso():
+    usuario_id = uuid4()
+    recurso_id = uuid4()
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_id,
+        usuario_id=usuario_id,
+        fecha_inicio=datetime.now(UTC),
+        fecha_fin=datetime.now(UTC) + timedelta(days=3),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    repo = FakePrestamoRepository([prestamo])
+    recurso_repo = FakeRecursoRepository(estado_inicial=EstadoRecurso.EN_USO)
+    reputacion_mock = SimpleNamespace()
+    service = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+        recurso_repository=recurso_repo,
+        reputacion_service=reputacion_mock,
+    )
+
+    dto = service.cancelar_prestamo(prestamo.id, motivo="Cancelado por usuario")
+
+    assert dto.id == prestamo.id
+    assert dto.estado == EstadoPrestamo.CANCELADO
+    assert prestamo.estado == EstadoPrestamo.CANCELADO
+    assert repo.saved == [prestamo]
+    assert recurso_repo.estado == EstadoRecurso.DISPONIBLE
+    assert recurso_repo.actualizaciones == [(recurso_id, EstadoRecurso.DISPONIBLE)]
+
+
+def test_cancelar_prestamo_inexistente_lanza_error():
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+
+    with pytest.raises(ValueError, match="Préstamo no encontrado"):
+        service.cancelar_prestamo(uuid4())
+
+
+def test_cancelar_prestamo_no_activo_lanza_error():
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime.now(UTC),
+        fecha_fin=datetime.now(UTC) + timedelta(days=3),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    repo = FakePrestamoRepository([prestamo])
+    service = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+
+    with pytest.raises(
+        ValueError, match="Solo se pueden cancelar préstamos pendientes de entrega física"
+    ):
+        service.cancelar_prestamo(prestamo.id)
+
+
+def test_contar_prestamos_en_curso():
+    usuario_id = uuid4()
+    otro_usuario_id = uuid4()
+
+    p_activo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_id,
+        fecha_inicio=datetime.now(UTC),
+        fecha_fin=datetime.now(UTC) + timedelta(days=1),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    p_entregado = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_id,
+        fecha_inicio=datetime.now(UTC) - timedelta(days=2),
+        fecha_fin=datetime.now(UTC) + timedelta(days=2),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    p_vencido = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_id,
+        fecha_inicio=datetime.now(UTC) - timedelta(days=5),
+        fecha_fin=datetime.now(UTC) - timedelta(days=1),
+        estado=EstadoPrestamo.VENCIDO,
+    )
+    p_devuelto = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_id,
+        fecha_inicio=datetime.now(UTC) - timedelta(days=5),
+        fecha_fin=datetime.now(UTC) - timedelta(days=1),
+        estado=EstadoPrestamo.DEVUELTO,
+    )
+    p_cancelado = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=usuario_id,
+        fecha_inicio=datetime.now(UTC),
+        fecha_fin=datetime.now(UTC) + timedelta(days=1),
+        estado=EstadoPrestamo.CANCELADO,
+    )
+    p_otro = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=otro_usuario_id,
+        fecha_inicio=datetime.now(UTC),
+        fecha_fin=datetime.now(UTC) + timedelta(days=1),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+
+    repo = FakePrestamoRepository(
+        [p_activo, p_entregado, p_vencido, p_devuelto, p_cancelado, p_otro]
+    )
+    service = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+
+    conteo = service.contar_prestamos_en_curso(usuario_id)
+    assert conteo == 3
+
 
 

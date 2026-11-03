@@ -344,3 +344,30 @@ class PrestamoService:
     def consultar_todos(self) -> list[PrestamoDTO]:
         prestamos = self._prestamo_repository.obtener_todos()
         return [PrestamoDTO.from_entity(p) for p in prestamos]
+
+    def cancelar_prestamo(self, id_prestamo: UUID, motivo: str = "") -> PrestamoDTO:
+        """Cancela administrativamente un préstamo pendiente de entrega física y libera el recurso."""
+        prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
+        if prestamo is None:
+            raise ValueError("Préstamo no encontrado")
+
+        prestamo.cancelar(motivo)
+        self._prestamo_repository.guardar(prestamo)
+
+        if self._recurso_repository is not None:
+            self._recurso_repository.actualizar_estado(
+                prestamo.recurso_id, EstadoRecurso.DISPONIBLE
+            )
+
+        return PrestamoDTO.from_entity(prestamo)
+
+    def contar_prestamos_en_curso(self, id_usuario: UUID) -> int:
+        """Cuenta los préstamos en curso del usuario (ACTIVO, ENTREGADO o VENCIDO)."""
+        prestamos = self._prestamo_repository.obtener_por_usuario(id_usuario)
+        estados_en_curso = {
+            EstadoPrestamo.ACTIVO,
+            EstadoPrestamo.ENTREGADO,
+            EstadoPrestamo.VENCIDO,
+        }
+        return sum(1 for p in prestamos if p.estado in estados_en_curso)
+

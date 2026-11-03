@@ -1,7 +1,8 @@
 """Tests unitarios para la entidad Usuario (domain)."""
-import pytest
 import re
 from uuid import UUID
+
+import pytest
 
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.usuario import (
     Usuario,
@@ -124,3 +125,46 @@ class TestUsuarioVerificarPassword:
 
         assert usuario.verificar_password("password123") is False
         assert usuario.verificar_password("PASSWORD123") is False
+
+
+class TestUsuarioCambiarRolesYEstado:
+    """Tests para cambiar_roles y establecer_estado en Usuario."""
+
+    def test_cambiar_roles_valido(self) -> None:
+        """RF-10: cambiar_roles asigna los nuevos roles."""
+        usuario = Usuario.crear_con_password(
+            nombre="Juan Pérez",
+            correo="juan@example.com",
+            telefono=None,
+            password_plano="Password123",
+            roles=[RolUsuario.ESTUDIANTE],
+        )
+        usuario.cambiar_roles([RolUsuario.DOCENTE])
+        assert usuario.roles == [RolUsuario.DOCENTE]
+
+    def test_cambiar_roles_vacio_lanza_value_error(self) -> None:
+        """RF-10: cambiar_roles sin roles lanza ValueError."""
+        usuario = Usuario.crear_con_password(
+            nombre="Juan Pérez",
+            correo="juan@example.com",
+            telefono=None,
+            password_plano="Password123",
+        )
+        with pytest.raises(ValueError, match="El usuario debe tener al menos un rol"):
+            usuario.cambiar_roles([])
+
+    def test_establecer_estado(self) -> None:
+        """RF-11: establecer_estado asigna True o False directamente."""
+        usuario = Usuario.crear_con_password(
+            nombre="Juan Pérez",
+            correo="juan@example.com",
+            telefono=None,
+            password_plano="Password123",
+        )
+        assert usuario.estado is True
+
+        usuario.establecer_estado(False)
+        assert usuario.estado is False
+
+        usuario.establecer_estado(True)
+        assert usuario.estado is True

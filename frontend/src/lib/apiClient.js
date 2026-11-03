@@ -26,7 +26,14 @@ async function request(path, options = {}) {
     error.detail = detalleBackend; // string | lista de errores de validación | undefined
     throw error;
   }
-  return response.json();
+  if (response.status === 204) {
+    return null;
+  }
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
 }
 
 export const apiClient = {
@@ -37,4 +44,5 @@ export const apiClient = {
     request(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   patch: (path, body) =>
     request(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
+  delete: (path) => request(path, { method: "DELETE" }),
 };

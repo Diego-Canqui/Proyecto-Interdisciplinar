@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from prestamos_recursos.contexts.reservas.domain.enums.estado_reserva import EstadoReserva
 from prestamos_recursos.shared.base_entity import BaseEntity
 
+DURACION_MAXIMA_RESERVA = timedelta(days=7)
 _ESTADOS_QUE_OCUPAN_RECURSO = {EstadoReserva.PENDIENTE, EstadoReserva.CONFIRMADA}
 
 
@@ -32,6 +33,8 @@ class Reserva(BaseEntity):
         fecha_inicio: datetime,
         fecha_fin: datetime,
     ) -> Reserva:
+        if cls._a_utc(fecha_fin) - cls._a_utc(fecha_inicio) > DURACION_MAXIMA_RESERVA:
+            raise ValueError("la duración máxima de una reserva es de 7 días")
         return cls(
             usuario_id=usuario_id,
             recurso_id=recurso_id,

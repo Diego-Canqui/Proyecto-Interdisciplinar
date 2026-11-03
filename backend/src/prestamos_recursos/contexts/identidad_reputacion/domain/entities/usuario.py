@@ -66,3 +66,12 @@ class Usuario(BaseEntity):
 
     def cambiar_estado(self) -> None:
         self.estado = not self.estado
+
+    def cambiar_roles(self, nuevos_roles: list[RolUsuario]) -> None:
+        if not nuevos_roles:
+            raise ValueError("El usuario debe tener al menos un rol")
+        self.roles = list(nuevos_roles)
+
+    def establecer_estado(self, activo: bool) -> None:
+        self.estado = activo
+

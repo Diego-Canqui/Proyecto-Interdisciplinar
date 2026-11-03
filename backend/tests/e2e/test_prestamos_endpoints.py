@@ -413,3 +413,114 @@ def test_completar_entrega_unificada():
     assert insp_data["garantia"]["tipo"] == "CARNET_UNIVERSITARIO"
 
 
+@pytest.mark.e2e
+def test_cancelar_prestamo_activo_por_gestor_exitoso():
+    ahora = datetime.now(UTC)
+    recurso_id = uuid4()
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_id,
+        usuario_id=uuid4(),
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=5),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    prestamo_repository = FakePrestamoRepository([prestamo])
+    recurso_repository = FakeRecursoRepository()
+    recurso_repository.estado = EstadoRecurso.EN_USO
+    service = PrestamoService(
+        prestamo_repository=prestamo_repository,
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+        recurso_repository=recurso_repository,
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+
+    response = client.post(f"/prestamos/{prestamo.id}/cancelar")
+    assert response.status_code == 200
+    assert response.json() == {
+        "detalle": "Préstamo cancelado exitosamente",
+        "estado": "CANCELADO",
+    }
+    assert prestamo.estado == EstadoPrestamo.CANCELADO
+    assert recurso_repository.estado == EstadoRecurso.DISPONIBLE
+
+
+@pytest.mark.e2e
+def test_cancelar_prestamo_inexistente_retorna_404():
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.ADMINISTRADOR_SISTEMA]
+    )
+
+    response = client.post(f"/prestamos/{uuid4()}/cancelar")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Préstamo no encontrado"
+
+
+@pytest.mark.e2e
+def test_cancelar_prestamo_no_activo_retorna_409():
+    ahora = datetime.now(UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=5),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+
+    response = client.post(f"/prestamos/{prestamo.id}/cancelar")
+    assert response.status_code == 409
+    assert "Solo se pueden cancelar préstamos pendientes" in response.json()["detail"]
+
+
+@pytest.mark.e2e
+def test_cancelar_prestamo_sin_rol_de_gestion_retorna_403():
+    ahora = datetime.now(UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=5),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.ESTUDIANTE]
+    )
+
+    response = client.post(f"/prestamos/{prestamo.id}/cancelar")
+    assert response.status_code == 403
+
+
+@pytest.mark.e2e
+def test_cancelar_prestamo_sin_token_retorna_401():
+    response = client.post(f"/prestamos/{uuid4()}/cancelar")
+    assert response.status_code == 401
+
+
+

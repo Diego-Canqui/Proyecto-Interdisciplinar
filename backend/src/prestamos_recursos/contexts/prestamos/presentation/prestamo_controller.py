@@ -210,6 +210,24 @@ def renovar_prestamo(
     return {"detalle": "Préstamo renovado exitosamente por 7 días"}
 
 
+@router.post("/{id_prestamo}/cancelar")
+def cancelar_prestamo(
+    id_prestamo: UUID,
+    _usuario: UsuarioDTO = Depends(  # noqa: B008
+        require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)  # noqa: B008
+    ),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
+) -> dict:
+    """Cancela administrativamente un préstamo en estado ACTIVO y libera el recurso."""
+    try:
+        service.cancelar_prestamo(id_prestamo)
+    except ValueError as exc:
+        status_code = 404 if str(exc) == "Préstamo no encontrado" else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"detalle": "Préstamo cancelado exitosamente", "estado": "CANCELADO"}
+
+
+
 @router.get("/usuarios/{id_usuario}/historial", response_model=list[PrestamoDTO])
 def consultar_historial(
     id_usuario: UUID,

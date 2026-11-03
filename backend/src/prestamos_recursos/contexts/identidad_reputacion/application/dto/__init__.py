@@ -15,10 +15,14 @@ from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion
     SancionDTO,
 )
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
+    ActualizarEstadoUsuarioDTO,
+    ActualizarRolUsuarioDTO,
     UsuarioDTO,
 )
 
 __all__ = [
+    "ActualizarEstadoUsuarioDTO",
+    "ActualizarRolUsuarioDTO",
     "AplicarSancionDTO",
     "CrearUsuarioDTO",
     "ElegibilidadDTO",

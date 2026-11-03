@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { crearUsuario, listarUsuarios } from "../api.js";
-import { mensajeDeError } from "../errores.js";
+import {
+  cambiarEstadoUsuario,
+  cambiarRolUsuario,
+  crearUsuario,
+  eliminarUsuario,
+  listarUsuarios,
+  obtenerPerfil,
+} from "../api.js";
+import { mensajeDeError, textoDeDetalle } from "../errores.js";
 
 // Textos propios por código para la creación de usuarios (RF-09, RF-10)
 const MENSAJES_ERROR = {
-  403: "No tienes permisos de gestión para crear usuarios.",
+  403: "No tienes permisos de gestión para crear usuarios o asignar este rol.",
   409: "Ya existe un usuario con ese correo.",
   422: "Datos inválidos: revisa la contraseña (mínimo 8 caracteres, una mayúscula, una minúscula y un dígito) y el teléfono.",
 };
@@ -15,8 +22,44 @@ const MENSAJES_CARGA = {
   403: "No tienes permisos de gestión para consultar usuarios.",
 };
 
+// Opciones de roles según jerarquía (RF-09, RF-10)
+const ROLES_SOLICITANTES = [
+  "ESTUDIANTE",
+  "DOCENTE",
+  "PERSONAL_ADMINISTRATIVO",
+];
+
+const ROLES_GESTION = [
+  "GESTOR_ALMACEN",
+  "ADMINISTRADOR_SISTEMA",
+];
+
+const TODOS_LOS_ROLES = [...ROLES_SOLICITANTES, ...ROLES_GESTION];
+
 /**
- * Página de administración y gestión de usuarios (RF-10).
+ * Lee el identificador y roles del usuario desde el JWT en localStorage (D5).
+ * @returns {{ id: string, roles: string[] } | null}
+ */
+function leerUsuarioToken() {
+  try {
+    const token = localStorage.getItem("token");
+    if (!token) return null;
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const relleno = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+    const datos = JSON.parse(atob(relleno));
+    return {
+      id: datos.sub || "",
+      roles: Array.isArray(datos.roles) ? datos.roles : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Página de administración y gestión de usuarios (RF-09, RF-10, RF-11, RF-12).
  * La ruta se anida bajo el layout, de modo que la página no aporta contenedor principal propio.
  * @returns {JSX.Element} Formulario de alta y tabla de usuarios registrados
  */
@@ -26,23 +69,44 @@ export default function UsuariosPage() {
   const [cargando, setCargando] = useState(true);
   const [errorCarga, setErrorCarga] = useState(null);
 
+  // Perfil del usuario en sesión (RF-09, RF-10, RF-11, RF-12)
+  const [usuarioActual, setUsuarioActual] = useState(leerUsuarioToken);
+
   // Campos del formulario de alta de usuario
   const [nombre, setNombre] = useState("");
   const [correo, setCorreo] = useState("");
   const [telefono, setTelefono] = useState("");
   const [password, setPassword] = useState("");
+  const [rol, setRol] = useState("ESTUDIANTE");
 
   // Estado de envío y mensajes de resultado del formulario
   const [enCurso, setEnCurso] = useState(false);
   const [errorCrear, setErrorCrear] = useState("");
   const [exitoCrear, setExitoCrear] = useState("");
 
+  // Estado de acciones de administración sobre la tabla (RF-10, RF-11, RF-12)
+  const [accionEnCurso, setAccionEnCurso] = useState(null);
+  const [confirmandoEliminarId, setConfirmandoEliminarId] = useState(null);
+  const [exitoAccion, setExitoAccion] = useState("");
+  const [errorAccion, setErrorAccion] = useState("");
+
+  // Permisos según el rol del usuario en sesión
+  const esAdmin = Boolean(usuarioActual?.roles?.includes("ADMINISTRADOR_SISTEMA"));
+  const esGestor = Boolean(usuarioActual?.roles?.includes("GESTOR_ALMACEN"));
+  const opcionesRolFormulario = esAdmin ? TODOS_LOS_ROLES : ROLES_SOLICITANTES;
+
   const cargar = useCallback(async () => {
     setCargando(true);
     setErrorCarga(null);
     try {
-      const datos = await listarUsuarios();
-      setUsuarios(Array.isArray(datos) ? datos : []);
+      const [datosUsuarios, perfil] = await Promise.all([
+        listarUsuarios(),
+        obtenerPerfil().catch(() => null),
+      ]);
+      setUsuarios(Array.isArray(datosUsuarios) ? datosUsuarios : []);
+      if (perfil) {
+        setUsuarioActual(perfil);
+      }
     } catch (err) {
       // 401: la sesión ya no vale → descartar token y redirigir al login (RF-09, RF-10)
       if (err.status === 401) {
@@ -81,13 +145,19 @@ export default function UsuariosPage() {
     setErrorCrear("");
     setExitoCrear("");
     try {
-      // Sin `roles`: el default [ESTUDIANTE] lo aplica el backend (RF-16)
-      await crearUsuario({ nombre, correo, telefono, password });
+      await crearUsuario({
+        nombre,
+        correo,
+        telefono,
+        password,
+        roles: [rol],
+      });
       setExitoCrear("Usuario creado correctamente.");
       setNombre("");
       setCorreo("");
       setTelefono("");
       setPassword("");
+      setRol("ESTUDIANTE");
       await cargar();
     } catch (err) {
       // 401: descartar token y redirigir al login (RF-09)
@@ -96,9 +166,75 @@ export default function UsuariosPage() {
         navigate("/login");
         return;
       }
-      setErrorCrear(mensajeDeError(err, MENSAJES_ERROR));
+      const detalle = textoDeDetalle(err?.detail);
+      setErrorCrear(detalle || mensajeDeError(err, MENSAJES_ERROR));
     } finally {
       setEnCurso(false);
+    }
+  };
+
+  const handleCambiarRol = async (idUsuario, nuevoRol) => {
+    setAccionEnCurso(idUsuario);
+    setExitoAccion("");
+    setErrorAccion("");
+    try {
+      await cambiarRolUsuario(idUsuario, nuevoRol);
+      setExitoAccion(`Rol actualizado correctamente a ${nuevoRol}.`);
+      await cargar();
+    } catch (err) {
+      if (err.status === 401) {
+        localStorage.removeItem("token");
+        navigate("/login");
+        return;
+      }
+      setErrorAccion(mensajeDeError(err));
+    } finally {
+      setAccionEnCurso(null);
+    }
+  };
+
+  const handleCambiarEstado = async (idUsuario, nuevoEstado) => {
+    setAccionEnCurso(idUsuario);
+    setExitoAccion("");
+    setErrorAccion("");
+    try {
+      await cambiarEstadoUsuario(idUsuario, nuevoEstado);
+      setExitoAccion(
+        nuevoEstado
+          ? "Cuenta activada correctamente."
+          : "Cuenta desactivada correctamente."
+      );
+      await cargar();
+    } catch (err) {
+      if (err.status === 401) {
+        localStorage.removeItem("token");
+        navigate("/login");
+        return;
+      }
+      setErrorAccion(mensajeDeError(err));
+    } finally {
+      setAccionEnCurso(null);
+    }
+  };
+
+  const handleEliminar = async (idUsuario) => {
+    setAccionEnCurso(idUsuario);
+    setExitoAccion("");
+    setErrorAccion("");
+    try {
+      await eliminarUsuario(idUsuario);
+      setExitoAccion("Usuario eliminado correctamente.");
+      setConfirmandoEliminarId(null);
+      await cargar();
+    } catch (err) {
+      if (err.status === 401) {
+        localStorage.removeItem("token");
+        navigate("/login");
+        return;
+      }
+      setErrorAccion(mensajeDeError(err));
+    } finally {
+      setAccionEnCurso(null);
     }
   };
 
@@ -181,6 +317,24 @@ export default function UsuariosPage() {
                   />
                 </div>
 
+                <div className="campo">
+                  <label className="campo__etiqueta" htmlFor="usuario-rol">
+                    Rol inicial
+                  </label>
+                  <select
+                    className="campo__control"
+                    id="usuario-rol"
+                    value={rol}
+                    onChange={(e) => setRol(e.target.value)}
+                  >
+                    {opcionesRolFormulario.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 {exitoCrear && (
                   <div className="alerta alerta--exito" role="status">
                     {exitoCrear}
@@ -209,6 +363,18 @@ export default function UsuariosPage() {
           <section className="tarjeta">
             <div className="tarjeta__cabecera">Usuarios registrados</div>
             <div className="tarjeta__cuerpo">
+              {exitoAccion && (
+                <div className="alerta alerta--exito" role="status">
+                  {exitoAccion}
+                </div>
+              )}
+
+              {errorAccion && (
+                <div className="alerta alerta--error" role="alert">
+                  {errorAccion}
+                </div>
+              )}
+
               {cargando ? (
                 <p className="cargando" role="status">
                   Cargando usuarios...
@@ -240,23 +406,121 @@ export default function UsuariosPage() {
                         <th scope="col">Correo</th>
                         <th scope="col">Roles</th>
                         <th scope="col">Estado</th>
+                        {esAdmin && <th scope="col">Acciones</th>}
                       </tr>
                     </thead>
                     <tbody>
-                      {usuarios.map((u) => (
-                        <tr key={u.id}>
-                          <td data-etiqueta="Nombre">{u.nombre}</td>
-                          <td data-etiqueta="Correo">{u.correo}</td>
-                          <td data-etiqueta="Roles">{(u.roles || []).join(", ")}</td>
-                          <td data-etiqueta="Estado">
-                            <span
-                              className={`insignia ${u.estado ? "insignia--exito" : "insignia--neutra"}`}
-                            >
-                              {u.estado ? "Activo" : "Inactivo"}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                      {usuarios.map((u) => {
+                        const esPropiaCuenta = u.id === usuarioActual?.id;
+                        const rolActualFila =
+                          u.roles?.find((r) => TODOS_LOS_ROLES.includes(r)) ||
+                          u.roles?.[0] ||
+                          "ESTUDIANTE";
+
+                        return (
+                          <tr key={u.id}>
+                            <td data-etiqueta="Nombre">{u.nombre}</td>
+                            <td data-etiqueta="Correo">{u.correo}</td>
+                            <td data-etiqueta="Roles">
+                              {esAdmin && !esPropiaCuenta ? (
+                                <select
+                                  className="campo__control"
+                                  value={rolActualFila}
+                                  onChange={(e) => handleCambiarRol(u.id, e.target.value)}
+                                  disabled={accionEnCurso === u.id}
+                                  aria-label={`Cambiar rol de ${u.nombre}`}
+                                >
+                                  {TODOS_LOS_ROLES.map((r) => (
+                                    <option key={r} value={r}>
+                                      {r}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                (u.roles || []).join(", ")
+                              )}
+                            </td>
+                            <td data-etiqueta="Estado">
+                              <span
+                                className={`insignia ${u.estado ? "insignia--exito" : "insignia--neutra"}`}
+                              >
+                                {u.estado ? "Activo" : "Inactivo"}
+                              </span>
+                            </td>
+                            {esAdmin && (
+                              <td data-etiqueta="Acciones">
+                                {esPropiaCuenta ? (
+                                  <>
+                                    <span className="insignia insignia--info">
+                                      Tu cuenta (protegida)
+                                    </span>{" "}
+                                    <button
+                                      type="button"
+                                      className="boton boton--secundario boton--sm"
+                                      disabled
+                                    >
+                                      Desactivar
+                                    </button>{" "}
+                                    <button
+                                      type="button"
+                                      className="boton boton--peligro boton--sm"
+                                      disabled
+                                    >
+                                      Eliminar
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="boton boton--secundario boton--sm"
+                                      onClick={() => handleCambiarEstado(u.id, !u.estado)}
+                                      disabled={accionEnCurso === u.id}
+                                    >
+                                      {u.estado ? "Desactivar" : "Activar"}
+                                    </button>{" "}
+                                    {confirmandoEliminarId !== u.id ? (
+                                      <button
+                                        type="button"
+                                        className="boton boton--peligro boton--sm"
+                                        onClick={() => {
+                                          setConfirmandoEliminarId(u.id);
+                                          setErrorAccion("");
+                                          setExitoAccion("");
+                                        }}
+                                        disabled={accionEnCurso === u.id}
+                                      >
+                                        Eliminar
+                                      </button>
+                                    ) : (
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="boton boton--peligro boton--sm"
+                                          onClick={() => handleEliminar(u.id)}
+                                          disabled={accionEnCurso === u.id}
+                                        >
+                                          {accionEnCurso === u.id
+                                            ? "Eliminando..."
+                                            : "Confirmar eliminación"}
+                                        </button>{" "}
+                                        <button
+                                          type="button"
+                                          className="boton boton--secundario boton--sm"
+                                          onClick={() => setConfirmandoEliminarId(null)}
+                                          disabled={accionEnCurso === u.id}
+                                        >
+                                          Cancelar
+                                        </button>
+                                      </>
+                                    )}
+                                  </>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

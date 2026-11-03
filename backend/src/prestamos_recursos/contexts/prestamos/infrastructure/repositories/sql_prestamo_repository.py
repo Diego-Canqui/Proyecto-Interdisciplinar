@@ -42,6 +42,7 @@ class SqlPrestamoRepository(PrestamoRepository):
         modelo.fecha_inicio = prestamo.fecha_inicio
         modelo.fecha_fin = prestamo.fecha_fin
         modelo.estado = prestamo.estado
+        self._session.flush()
 
     def obtener_por_id(self, id: UUID) -> Prestamo | None:
         modelo = self._session.get(PrestamoModel, id)

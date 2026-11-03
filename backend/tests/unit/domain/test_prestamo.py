@@ -228,3 +228,17 @@ def test_cancelar_prestamo():
     with pytest.raises(ValueError, match="No se puede cancelar un préstamo que ya ha sido devuelto"):
         prestamo_dev.cancelar()
 
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "estado",
+    [EstadoPrestamo.ENTREGADO, EstadoPrestamo.VENCIDO, EstadoPrestamo.CANCELADO],
+)
+def test_cancelar_prestamo_no_activo_lanza_error(estado: EstadoPrestamo):
+    prestamo = _crear_prestamo(estado=estado)
+    with pytest.raises(
+        ValueError, match="Solo se pueden cancelar préstamos pendientes de entrega física \\(ACTIVO\\)"
+    ):
+        prestamo.cancelar()
+
+

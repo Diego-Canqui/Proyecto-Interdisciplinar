@@ -110,7 +110,9 @@ class Prestamo(BaseEntity):
         self.fecha_fin = self.fecha_fin + timedelta(days=dias)
 
     def cancelar(self, motivo: str = "") -> None:
-        """Cancela administrativamente el préstamo si no ha sido devuelto."""
+        """Cancela administrativamente el préstamo si está pendiente de entrega física (ACTIVO)."""
         if self.estado == EstadoPrestamo.DEVUELTO:
             raise ValueError("No se puede cancelar un préstamo que ya ha sido devuelto")
+        if self.estado != EstadoPrestamo.ACTIVO:
+            raise ValueError("Solo se pueden cancelar préstamos pendientes de entrega física (ACTIVO)")
         self.estado = EstadoPrestamo.CANCELADO

@@ -30,3 +30,15 @@ class UsuarioDTO(BaseModel):
         )
 
     model_config = {"from_attributes": True}
+
+
+class ActualizarRolUsuarioDTO(BaseModel):
+    """DTO para actualizar el rol de un usuario."""
+
+    rol: RolUsuario
+
+
+class ActualizarEstadoUsuarioDTO(BaseModel):
+    """DTO para actualizar el estado (activo/inactivo) de un usuario."""
+
+    estado: bool

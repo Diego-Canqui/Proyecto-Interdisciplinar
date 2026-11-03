@@ -817,3 +817,38 @@ class TestObtenerPerfilGestion:
         assert len(ficha.excepciones) == 2
         assert len(despues) == len(antes) == 2
         assert {e.id: e.activa for e in despues} == {e.id: e.activa for e in antes}
+
+
+class TestConsultasLecturaReputacionService:
+    """Tests para métodos de consulta de solo lectura sin inserción en BD."""
+
+    def test_consultar_elegibilidad_y_nivel_sin_perfil_no_crea_en_bd(
+        self, reputacion_service, perfil_repo
+    ):
+        """Usuario sin perfil retorna elegible=True y nivel NORMAL sin insertar perfil en BD."""
+        id_aleatorio = uuid4()
+        elegibilidad = reputacion_service.consultar_elegibilidad_lectura(id_aleatorio)
+        assert elegibilidad.elegible is True
+        assert elegibilidad.razon is None
+
+        nivel = reputacion_service.consultar_nivel_lectura(id_aleatorio)
+        assert nivel == NivelReputacion.NORMAL
+
+        puntaje = reputacion_service.consultar_puntaje_lectura(id_aleatorio)
+        assert puntaje == 500
+
+        # Verifica que NO se haya insertado fila en perfiles_reputacion
+        assert perfil_repo.obtener_por_usuario(id_aleatorio) is None
+
+    def test_consultar_elegibilidad_con_sancion_vigente(
+        self, reputacion_service, usuario_creado
+    ):
+        """Usuario con sanción vigente devuelve elegible=False con la razón adecuada."""
+        reputacion_service.aplicar_sancion(
+            usuario_id=usuario_creado,
+            tipo=TipoSancion.DANO_PARCIAL,
+            motivo="Pantalla rota",
+        )
+        elegibilidad = reputacion_service.consultar_elegibilidad_lectura(usuario_creado)
+        assert elegibilidad.elegible is False
+        assert "tienes una sanción vigente de tipo DANO_PARCIAL" in elegibilidad.razon

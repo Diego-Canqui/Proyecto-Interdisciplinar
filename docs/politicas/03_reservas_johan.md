@@ -10,9 +10,10 @@
 ## 1. Qué se implementó en este contexto
 
 1. **Solicitud de Reservas con Autoconfirmación o Encolamiento (`crear_reserva`):**
-   - Validación de rango horario (`fecha_fin > fecha_inicio`) y normalización a UTC.
+   - Validación de rango horario (`fecha_fin > fecha_inicio`), normalización a UTC y verificación de duración máxima de **7 días** (`DURACION_MAXIMA_RESERVA = timedelta(days=7)`, Spec 006).
    - Si el horario solicitado para ese recurso no choca con ninguna reserva `CONFIRMADA`, la reserva se confirma automáticamente en el acto (`CONFIRMADA`).
    - Si otro usuario ya tiene una reserva `CONFIRMADA` que se cruza en ese horario, la solicitud no se pierde: se registra en la **Lista de Espera** en estado `PENDIENTE`.
+
 2. **Algoritmo de Prioridad por Reputación (`AlgoritmoPrioridadService`):**
    - Servicio de dominio puro que ordena la cola de espera de un recurso priorizando a los usuarios con **mayor puntaje de reputación** (obtenido del contexto `identidad_reputacion`) y desempatando por orden de llegada (`fecha_inicio` más antigua).
 3. **Promoción Automática al Cancelar (`cancelar_reserva`):**
@@ -25,8 +26,9 @@
 
 ## 2. Políticas y Reglas de Negocio del Módulo
 
-### Política 1: Validación de Horarios y Prohibición de Duplicados del Mismo Usuario
+### Política 1: Validación de Horarios, Duración Máxima y Prohibición de Duplicados
 - Toda reserva exige `fecha_fin > fecha_inicio` (de lo contrario lanza `ValueError("fecha_fin debe ser posterior a fecha_inicio")`).
+- **Duración máxima de 7 días (Spec 006):** En `Reserva.crear()` se valida que `fecha_fin - fecha_inicio <= timedelta(days=7)` (168 horas). Si la duración solicitada supera los 7 días, se rechaza con `409 Conflict` (`ValueError("la duración máxima de una reserva es de 7 días")`).
 - Dos reservas se superponen cuando `inicio_A < fin_B` y `inicio_B < fin_A` (`se_superpone_con`). Los horarios consecutivos exactos (donde una termina a las 12:00 y otra empieza a las 12:00) son válidos y no chocan.
 - Un mismo usuario **no puede** crear dos reservas activas que se superpongan para el mismo recurso (responde `409 Conflict`: *"ya tienes una reserva activa para este recurso en ese horario"*).
 
@@ -44,7 +46,20 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
 ### Política 4: Promoción Automática en Cancelación y Reglas de Acceso
 - Tanto el titular de la reserva como el personal de gestión pueden cancelar una reserva (`PENDIENTE` o `CONFIRMADA`).
 - Si la reserva cancelada estaba `CONFIRMADA`, el sistema ejecuta automáticamente la promoción de la cola de espera para que el horario liberado pase al primer candidato elegible por reputación sin necesidad de intervención manual.
+- **Filtro de elegibilidad en promoción (Spec 006):** Durante la promoción automática, el sistema consulta `_es_usuario_elegible(candidata.usuario_id)` y **salta automáticamente** a cualquier candidato que tenga una sanción bloqueante activa no cubierta por excepción académica, promoviendo al siguiente en la lista.
 - Solo `GESTOR_ALMACEN` y `ADMINISTRADOR_SISTEMA` pueden confirmar manualmente reservas pendientes o iniciar el préstamo (`POST /reservas/{id}/prestamo`).
+
+### Política 5: Segregación de Funciones, Elegibilidad por Sanciones y Cupo Simultáneo por Reputación (Spec 006)
+1. **Segregación de funciones en reservas:**
+   - Quienes administran y entregan bienes no pueden auto-solicitarse préstamos: si un usuario autenticado con rol `GESTOR_ALMACEN` o `ADMINISTRADOR_SISTEMA` envía `POST /reservas`, el servidor responde `403 Forbidden` (*"las cuentas de gestión y administración no pueden solicitar reservas ni préstamos para sí mismas"*).
+   - En la interfaz `/reservas`, los roles de gestión ven el encabezado «Gestión de reservas» y no visualizan el formulario de solicitud.
+2. **Bloqueo por sanción vigente:**
+   - Al invocar `crear_reserva`, `confirmar_reserva` o `convertir_a_prestamo`, el sistema verifica `_verificar_elegibilidad_usuario(usuario_id)` consultando a `ReputacionService`. Si el titular tiene una sanción vigente activa no amparada por una excepción académica, la operación se rechaza con `409 Conflict`.
+3. **Límite de operaciones simultáneas por nivel de reputación:**
+   - En `crear_reserva`, `_verificar_limite_operaciones_simultaneas` consulta el nivel del usuario en `ReputacionService` (`NivelReputacion.limite_operaciones`) y contabiliza:
+     `total_en_curso = contar_reservas_activas_usuario(usuario_id) + prestamo_service.contar_prestamos_en_curso(usuario_id)`
+   - Si `total_en_curso >= nivel.limite_operaciones` (`BAJO`: 1, `NORMAL`: 2, `BUENO`: 3, `EXCELENTE`: 5), la solicitud se rechaza con `409 Conflict` informando el límite del nivel.
+
 
 ---
 

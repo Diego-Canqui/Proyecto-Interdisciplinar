@@ -54,6 +54,11 @@ def get_current_user(
             detail="Token inválido o expirado",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if not usuario.estado:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La cuenta de usuario está desactivada",
+        )
     return usuario
 
 

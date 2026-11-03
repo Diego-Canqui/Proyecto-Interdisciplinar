@@ -263,6 +263,28 @@ class TestLogin:
         assert exc_info.value.status_code == 401
         assert exc_info.value.detail == "Credenciales inválidas"
 
+    def test_login_usuario_desactivado_403(self, auth_service, usuario_repo):
+        """RF-11: Login con cuenta desactivada lanza 403 Forbidden."""
+        datos_registro = CrearUsuarioDTO(
+            nombre="Inactivo User",
+            correo="inactivo@example.com",
+            telefono=None,
+            password="Password123",
+        )
+        auth_service.registrar_usuario(datos_registro)
+
+        # Desactivar usuario
+        usuario = usuario_repo.obtener_por_correo("inactivo@example.com")
+        usuario.establecer_estado(False)
+        usuario_repo.guardar(usuario)
+
+        datos_login = LoginDTO(correo="inactivo@example.com", password="Password123")
+        with pytest.raises(HTTPException) as exc_info:
+            auth_service.login(datos_login)
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "La cuenta de usuario está desactivada"
+
+
 
 @pytest.mark.integration
 class TestValidarToken:

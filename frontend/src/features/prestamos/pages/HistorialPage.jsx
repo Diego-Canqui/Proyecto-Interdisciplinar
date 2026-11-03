@@ -1,19 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { buscarRecursos } from "../../catalogo/api.js";
 import { listarUsuarios, obtenerPerfil } from "../../identidad/api.js";
 import {
+  cancelarPrestamo,
   completarEntrega,
   consultarHistorial,
   consultarInspeccion,
   listarTodosPrestamos,
   registrarDevolucion,
-  renovarPrestamo,
 } from "../api.js";
 
 const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
 
-const ESTADOS_ACCION_DEVOLUCION = new Set(["ACTIVO", "ENTREGADO", "VENCIDO"]);
+const ESTADOS_ACCION_DEVOLUCION = new Set(["ENTREGADO", "VENCIDO"]);
 
 const CLASE_ESTADO_PRESTAMO = {
   ACTIVO: "insignia--info",
@@ -51,10 +51,12 @@ export default function HistorialPage() {
   const [recursos, setRecursos] = useState([]);
   const [usuarios, setUsuarios] = useState([]);
   const [cargando, setCargando] = useState(true);
-  const [renovandoId, setRenovandoId] = useState("");
+  const [cancelandoId, setCancelandoId] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("TODOS");
   const [error, setError] = useState("");
   const [exito, setExito] = useState("");
+
+  const contenedorPanelesRef = useRef(null);
 
   // Modal Entrega / Checklist Salida
   const [prestamoParaEntrega, setPrestamoParaEntrega] = useState(null);
@@ -276,18 +278,27 @@ export default function HistorialPage() {
     }
   };
 
-  const manejarRenovacion = async (idPrestamo) => {
+  useEffect(() => {
+    if (prestamoParaEntrega || prestamoParaDevolucion || inspeccionVisualizada) {
+      contenedorPanelesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [prestamoParaEntrega, prestamoParaDevolucion, inspeccionVisualizada]);
+
+  const manejarCancelacion = async (idPrestamo) => {
     setError("");
     setExito("");
-    setRenovandoId(idPrestamo);
+    setCancelandoId(idPrestamo);
     try {
-      const res = await renovarPrestamo(idPrestamo);
-      setExito(res?.detalle || "Préstamo renovado exitosamente por 7 días adicionales.");
-      await cargarListaPrestamos(usuario);
-    } catch (errorRenovacion) {
-      setError(mensajeError(errorRenovacion));
+      await cancelarPrestamo(idPrestamo);
+      setExito("Préstamo cancelado exitosamente. El recurso volvió a estar disponible en el catálogo.");
+      await Promise.all([
+        cargarListaPrestamos(usuario),
+        buscarRecursos().then(setRecursos).catch(() => {}),
+      ]);
+    } catch (errorCancelacion) {
+      setError(mensajeError(errorCancelacion));
     } finally {
-      setRenovandoId("");
+      setCancelandoId("");
     }
   };
 
@@ -327,7 +338,7 @@ export default function HistorialPage() {
         <p className="pagina__subtitulo">
           {esGestion
             ? "Ventanilla de almacén: inspección de salida (garantía + checklist), control de entrega y recepción física con detección de daños."
-            : "Revisa los préstamos asociados a tus reservas, consulta el checklist de tus equipos y solicita renovaciones."}
+            : "Revisa los préstamos asociados a tus reservas y consulta el checklist e inspección de tus equipos."}
         </p>
       </header>
 
@@ -342,7 +353,9 @@ export default function HistorialPage() {
         </div>
       )}
 
-      {/* MODAL / FORMULARIO FLOTANTE DE ENTREGA Y CHECKLIST INICIAL */}
+      {/* Contenedor con ref para auto-scroll al abrir entrega, devolución o checklist */}
+      <div ref={contenedorPanelesRef}>
+        {/* MODAL / FORMULARIO FLOTANTE DE ENTREGA Y CHECKLIST INICIAL */}
       {prestamoParaEntrega && (
         <div className="tarjeta" style={{ marginBottom: "2rem", border: "2px solid var(--primario)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
@@ -652,6 +665,7 @@ export default function HistorialPage() {
           </div>
         </div>
       )}
+      </div>
 
       {/* Barra de filtros */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.5rem" }}>
@@ -671,6 +685,7 @@ export default function HistorialPage() {
             <option value="ENTREGADO">Entregados en Ventanilla</option>
             <option value="DEVUELTO">Devueltos</option>
             <option value="VENCIDO">Vencidos en Mora</option>
+            <option value="CANCELADO">Cancelados</option>
           </select>
         </div>
         <span style={{ fontSize: "0.85rem", color: "var(--texto-secundario, #64748b)" }}>
@@ -707,8 +722,6 @@ export default function HistorialPage() {
                   ? `${usuarioObj.nombre} (${usuarioObj.correo})`
                   : prestamo.usuario_id;
                 const puedeDevolver = esGestion && ESTADOS_ACCION_DEVOLUCION.has(prestamo.estado);
-                const puedeRenovar = prestamo.estado === "ACTIVO" || prestamo.estado === "ENTREGADO";
-                const estaRenovando = renovandoId === prestamo.id;
 
                 return (
                   <tr key={prestamo.id}>
@@ -738,23 +751,36 @@ export default function HistorialPage() {
                     </td>
                     <td data-etiqueta="Acciones">
                       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
-                        {/* Botón de Entrega Física con Checklist (Gestores, cuando el préstamo está ACTIVO pero no formalizado) */}
+                        {/* Botones para préstamos ACTIVO (Ventanilla: Entrega Física o Cancelación) */}
                         {esGestion && prestamo.estado === "ACTIVO" && (
-                          <button
-                            type="button"
-                            className="boton boton--primario boton--sm"
-                            onClick={() => abrirModalEntrega(prestamo)}
-                            title="Completar garantía y checklist de entrega"
-                          >
-                            📋 Realizar Entrega
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              className="boton boton--primario boton--sm"
+                              disabled={cancelandoId !== ""}
+                              onClick={() => abrirModalEntrega(prestamo)}
+                              title="Completar garantía y checklist de entrega"
+                            >
+                              📋 Realizar Entrega
+                            </button>
+                            <button
+                              type="button"
+                              className="boton boton--peligro boton--sm"
+                              disabled={cancelandoId !== ""}
+                              onClick={() => manejarCancelacion(prestamo.id)}
+                              title="Cancelar préstamo y liberar recurso"
+                            >
+                              {cancelandoId === prestamo.id ? "Cancelando..." : "✕ Cancelar Préstamo"}
+                            </button>
+                          </>
                         )}
 
-                        {/* Botón de Devolución con Checklist de Retorno */}
+                        {/* Botón de Devolución con Checklist de Retorno (solo ENTREGADO o VENCIDO) */}
                         {puedeDevolver && (
                           <button
                             type="button"
                             className="boton boton--secundario boton--sm"
+                            disabled={cancelandoId !== ""}
                             onClick={() => abrirModalDevolucion(prestamo)}
                             title="Recepción física y verificación de estado"
                           >
@@ -762,24 +788,11 @@ export default function HistorialPage() {
                           </button>
                         )}
 
-                        {/* Botón de Renovación */}
-                        {puedeRenovar && (
-                          <button
-                            type="button"
-                            className="boton boton--fantasma boton--sm"
-                            disabled={renovandoId !== ""}
-                            onClick={() => manejarRenovacion(prestamo.id)}
-                            title="Extender fecha límite 7 días"
-                          >
-                            {estaRenovando ? "..." : "🔄 +7 días"}
-                          </button>
-                        )}
-
                         {/* Botón de Consulta de Checklist/Inspección */}
                         <button
                           type="button"
                           className="boton boton--fantasma boton--sm"
-                          disabled={cargandoInspeccion}
+                          disabled={cargandoInspeccion || cancelandoId !== ""}
                           onClick={() => verInspeccion(prestamo.id)}
                           title="Consultar checklist y garantía"
                         >

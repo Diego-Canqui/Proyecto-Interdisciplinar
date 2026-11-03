@@ -276,3 +276,52 @@ def test_flujo_e2e_reserva_espera_y_promocion():
 	assert consulta_resp.status_code == 200
 	assert consulta_resp.json()["estado"] == "CONFIRMADA"
 
+
+@pytest.mark.e2e
+def test_solicitar_reserva_rechaza_roles_gestion_con_403():
+	gestor_id = uuid4()
+	app.dependency_overrides[get_current_user] = lambda: crear_usuario(gestor_id, RolUsuario.GESTOR_ALMACEN)
+	inicio = (datetime.now(UTC) + timedelta(hours=5)).isoformat()
+	fin = (datetime.now(UTC) + timedelta(hours=7)).isoformat()
+	datos_gestor = {
+		"usuario_id": str(gestor_id),
+		"recurso_id": str(uuid4()),
+		"fecha_inicio": inicio,
+		"fecha_fin": fin,
+	}
+	resp_gestor = client.post("/reservas", json=datos_gestor)
+	assert resp_gestor.status_code == 403
+	assert resp_gestor.json()["detail"] == (
+		"las cuentas de gestión y administración no pueden solicitar reservas para sí mismas"
+	)
+
+	admin_id = uuid4()
+	app.dependency_overrides[get_current_user] = lambda: crear_usuario(admin_id, RolUsuario.ADMINISTRADOR_SISTEMA)
+	datos_admin = {
+		"usuario_id": str(admin_id),
+		"recurso_id": str(uuid4()),
+		"fecha_inicio": inicio,
+		"fecha_fin": fin,
+	}
+	resp_admin = client.post("/reservas", json=datos_admin)
+	assert resp_admin.status_code == 403
+	assert resp_admin.json()["detail"] == (
+		"las cuentas de gestión y administración no pueden solicitar reservas para sí mismas"
+	)
+
+
+@pytest.mark.e2e
+def test_solicitar_reserva_duracion_mayor_a_7_dias_retorna_409():
+	u_id = uuid4()
+	app.dependency_overrides[get_current_user] = lambda: crear_usuario(u_id, RolUsuario.ESTUDIANTE)
+	inicio = datetime.now(UTC) + timedelta(hours=2)
+	datos = {
+		"usuario_id": str(u_id),
+		"recurso_id": str(uuid4()),
+		"fecha_inicio": inicio.isoformat(),
+		"fecha_fin": (inicio + timedelta(days=8)).isoformat(),
+	}
+	resp = client.post("/reservas", json=datos)
+	assert resp.status_code == 409
+	assert resp.json()["detail"] == "la duración máxima de una reserva es de 7 días"
+
