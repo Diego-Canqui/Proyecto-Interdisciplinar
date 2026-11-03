@@ -43,7 +43,9 @@ from prestamos_recursos.shared.database import Session as DBSession
 router = APIRouter(prefix="/reputacion", tags=["Reputación"])
 
 
-def get_reputacion_service(session: DBSession = Depends(get_session)) -> ReputacionService:  # noqa: B008
+def get_reputacion_service(
+    session: DBSession = Depends(get_session, scope="function"),  # noqa: B008
+) -> ReputacionService:
     """Factory para inyectar ReputacionService con repositorios reales."""
     return ReputacionService(
         SqlPerfilReputacionRepository(session),

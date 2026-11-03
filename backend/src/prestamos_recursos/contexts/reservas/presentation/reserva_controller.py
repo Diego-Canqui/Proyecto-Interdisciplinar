@@ -53,7 +53,9 @@ from prestamos_recursos.shared.database import get_session
 router = APIRouter(prefix="/reservas", tags=["Reservas"])
 
 
-def obtener_servicio(sesion: Annotated[Session, Depends(get_session)]) -> ReservaService:
+def obtener_servicio(
+    sesion: Annotated[Session, Depends(get_session, scope="function")],
+) -> ReservaService:
     prestamos = PrestamoService(
         SqlPrestamoRepository(sesion),
         SqlChecklistRepository(sesion),

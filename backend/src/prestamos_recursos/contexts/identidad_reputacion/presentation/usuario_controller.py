@@ -28,7 +28,9 @@ from prestamos_recursos.shared.database import get_session
 router = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 
 
-def get_usuario_service(session: Session = Depends(get_session)) -> UsuarioService:  # noqa: B008
+def get_usuario_service(
+    session: Session = Depends(get_session, scope="function"),  # noqa: B008
+) -> UsuarioService:
     from prestamos_recursos.contexts.catalogo.infrastructure.repositories import (
         SqlRecursoRepository,
     )
