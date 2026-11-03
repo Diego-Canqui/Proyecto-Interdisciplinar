@@ -43,7 +43,7 @@ Ejemplos:
   ./scripts/consultar.sh 'SELECT * FROM identidad_reputacion.usuario;'
   ./scripts/consultar.sh '\dt identidad_reputacion.*'
 
-Nota: las tablas las crea el backend al arrancar (make backend); la BD sola no las tiene.
+Nota: las tablas las crea el backend al arrancar (./dev.sh); la BD sola no las tiene.
 FIN
 }
 
@@ -90,9 +90,7 @@ hay_tablas() {
 avisar_faltan_tablas() {
   cat >&2 <<'FIN'
 AVISO: todavía no existen las tablas (falta identidad_reputacion.usuario).
-       Las crea el backend al arrancar: ejecuta 'make backend' y vuelve a consultar.
-       Nota: los schemas reservas y prestamos siguen vacíos (contextos en stub);
-       solo identidad_reputacion y catalogo tienen tablas.
+       Las crea el backend al arrancar: ejecuta './dev.sh' y vuelve a consultar.
 FIN
 }
 
