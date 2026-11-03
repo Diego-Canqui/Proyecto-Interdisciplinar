@@ -5,6 +5,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
+    NivelReputacion,
+)
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
 from prestamos_recursos.contexts.reservas.application.dto.reserva_dto import (
@@ -51,6 +54,9 @@ class FakeReservaRepository:
             if r.recurso_id == id_recurso and r.estado == EstadoReserva.PENDIENTE
         ]
 
+    def obtener_por_usuario(self, id_usuario):
+        return [r for r in self.reservas if r.usuario_id == id_usuario]
+
     def guardar(self, reserva):
         self.saved.append(reserva)
         for idx, r in enumerate(self.reservas):
@@ -67,6 +73,9 @@ class FakePrestamoRepository:
     def guardar(self, prestamo):
         self.saved.append(prestamo)
 
+    def obtener_por_usuario(self, id_usuario):
+        return [p for p in self.saved if getattr(p, "usuario_id", None) == id_usuario]
+
 
 class FakeRecursoRepository:
     def __init__(self, estado=EstadoRecurso.DISPONIBLE, existe=True):
@@ -80,12 +89,34 @@ class FakeRecursoRepository:
 
 
 class FakeReputacionService:
-    def __init__(self, puntajes: dict[UUID, int] | None = None):
+    def __init__(
+        self,
+        puntajes: dict[UUID, int] | None = None,
+        elegibles: dict[UUID, bool] | None = None,
+        niveles: dict[UUID, NivelReputacion] | None = None,
+    ):
         self.puntajes = puntajes or {}
+        self.elegibles = elegibles or {}
+        self.niveles = niveles or {}
 
     def obtener_perfil(self, usuario_id: UUID):
         puntaje = self.puntajes.get(usuario_id, 500)
-        return SimpleNamespace(puntaje=puntaje)
+        nivel = self.niveles.get(usuario_id, NivelReputacion.NORMAL)
+        return SimpleNamespace(puntaje=puntaje, nivel=nivel)
+
+    def consultar_elegibilidad_lectura(self, usuario_id: UUID):
+        es_elegible = self.elegibles.get(usuario_id, True)
+        if not es_elegible:
+            return SimpleNamespace(
+                elegible=False, razon="tienes una sanción vigente de tipo DANO_PARCIAL"
+            )
+        return SimpleNamespace(elegible=True, razon=None)
+
+    def consultar_nivel_lectura(self, usuario_id: UUID) -> NivelReputacion:
+        return self.niveles.get(usuario_id, NivelReputacion.NORMAL)
+
+    def consultar_puntaje_lectura(self, usuario_id: UUID) -> int:
+        return self.puntajes.get(usuario_id, 500)
 
 
 def make_reserva(estado=EstadoReserva.CONFIRMADA):
@@ -540,4 +571,232 @@ def test_obtener_cola_espera_ordena_por_reputacion():
     assert len(cola) == 2
     assert cola[0].id == r2.id
     assert cola[1].id == r1.id
+
+
+# --- Tests RF-05: Duración máxima de reserva (7 días) ---
+
+
+def test_reserva_crear_limite_7_dias():
+    u_id = uuid4()
+    r_id = uuid4()
+    inicio = datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc)
+
+    # Exactamente 7 días (168 horas) permitido
+    fin_7_dias = inicio + timedelta(days=7)
+    reserva = Reserva.crear(
+        usuario_id=u_id,
+        recurso_id=r_id,
+        fecha_inicio=inicio,
+        fecha_fin=fin_7_dias,
+    )
+    assert reserva.fecha_fin == fin_7_dias
+
+    # Más de 7 días (7 días + 1 segundo) lanza ValueError
+    with pytest.raises(ValueError, match="la duración máxima de una reserva es de 7 días"):
+        Reserva.crear(
+            usuario_id=u_id,
+            recurso_id=r_id,
+            fecha_inicio=inicio,
+            fecha_fin=inicio + timedelta(days=7, seconds=1),
+        )
+
+
+def test_reserva_constructor_directo_permite_mas_de_7_dias_para_bd():
+    u_id = uuid4()
+    r_id = uuid4()
+    inicio = datetime(2026, 11, 1, 10, 0, tzinfo=timezone.utc)
+    fin_10_dias = inicio + timedelta(days=10)
+
+    # Constructor directo (usado por ORM / mapeadores) no lanza ValueError por 7 días
+    reserva = Reserva(
+        usuario_id=u_id,
+        recurso_id=r_id,
+        fecha_inicio=inicio,
+        fecha_fin=fin_10_dias,
+    )
+    assert reserva.fecha_fin == fin_10_dias
+
+
+# --- Tests RF-03: Bloqueo por sanción vigente ---
+
+
+def test_crear_reserva_usuario_con_sancion_vigente_lanza_error():
+    u_sancionado = uuid4()
+    inicio, fin = _horario_futuro()
+    datos = CrearReservaDTO(
+        usuario_id=u_sancionado,
+        recurso_id=uuid4(),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
+    )
+    repo = FakeReservaRepository()
+    reputacion = FakeReputacionService(elegibles={u_sancionado: False})
+    service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()), reputacion)
+
+    with pytest.raises(ValueError, match="sanción vigente"):
+        service.crear_reserva(datos)
+
+
+def test_confirmar_reserva_usuario_con_sancion_vigente_lanza_error():
+    u_sancionado = uuid4()
+    inicio, fin = _horario_futuro()
+    reserva = Reserva.crear(
+        usuario_id=u_sancionado,
+        recurso_id=uuid4(),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
+    )
+    repo = FakeReservaRepository(reserva=reserva)
+    reputacion = FakeReputacionService(elegibles={u_sancionado: False})
+    service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()), reputacion)
+
+    with pytest.raises(ValueError, match="sanción vigente"):
+        service.confirmar_reserva(reserva.id)
+
+
+def test_convertir_a_prestamo_usuario_con_sancion_vigente_lanza_error():
+    u_sancionado = uuid4()
+    inicio, fin = _horario_futuro()
+    reserva = Reserva.crear(
+        usuario_id=u_sancionado,
+        recurso_id=uuid4(),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
+    )
+    reserva.confirmar()
+    repo = FakeReservaRepository(reserva=reserva)
+    reputacion = FakeReputacionService(elegibles={u_sancionado: False})
+    service = ReservaService(
+        repo,
+        make_prestamo_service(FakePrestamoRepository(), FakeRecursoRepository()),
+        reputacion,
+    )
+
+    with pytest.raises(ValueError, match="sanción vigente"):
+        service.convertir_a_prestamo(reserva.id)
+
+
+def test_cancelar_reserva_omite_candidato_sancionado_en_promocion():
+    recurso_id = uuid4()
+    u_confirmado = uuid4()
+    u_sancionado = uuid4()
+    u_limpio = uuid4()
+    inicio, fin = _horario_futuro()
+
+    r_confirmada = Reserva.crear(
+        usuario_id=u_confirmado,
+        recurso_id=recurso_id,
+        fecha_inicio=inicio,
+        fecha_fin=fin,
+    )
+    r_confirmada.confirmar()
+
+    r_sancionado = Reserva.crear(
+        usuario_id=u_sancionado,
+        recurso_id=recurso_id,
+        fecha_inicio=inicio,
+        fecha_fin=fin,
+    )
+    r_limpio = Reserva.crear(
+        usuario_id=u_limpio,
+        recurso_id=recurso_id,
+        fecha_inicio=inicio,
+        fecha_fin=fin,
+    )
+
+    repo = FakeReservaRepository(reservas=[r_confirmada, r_sancionado, r_limpio])
+    # u_sancionado tiene mayor puntaje (900 vs 500) pero está sancionado (elegible=False)
+    reputacion = FakeReputacionService(
+        puntajes={u_sancionado: 900, u_limpio: 500},
+        elegibles={u_sancionado: False, u_limpio: True},
+    )
+    service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()), reputacion)
+
+    assert service.cancelar_reserva(r_confirmada.id) is True
+    # u_sancionado fue saltado; se promovió a u_limpio
+    assert r_sancionado.estado == EstadoReserva.PENDIENTE
+    assert r_limpio.estado == EstadoReserva.CONFIRMADA
+
+
+# --- Tests RF-04: Límite de operaciones activas simultáneas según NivelReputacion ---
+
+
+class FakePrestamoServiceConContador:
+    def __init__(self, prestamos_en_curso: dict[UUID, int] | None = None):
+        self.prestamos_en_curso = prestamos_en_curso or {}
+
+    def contar_prestamos_en_curso(self, id_usuario: UUID) -> int:
+        return self.prestamos_en_curso.get(id_usuario, 0)
+
+
+@pytest.mark.parametrize(
+    ("nivel", "limite"),
+    [
+        (NivelReputacion.BAJO, 1),
+        (NivelReputacion.NORMAL, 2),
+        (NivelReputacion.BUENO, 3),
+        (NivelReputacion.EXCELENTE, 5),
+    ],
+)
+def test_limite_operaciones_simultaneas_por_nivel(nivel, limite):
+    u_id = uuid4()
+    reputacion = FakeReputacionService(niveles={u_id: nivel})
+    repo = FakeReservaRepository()
+    prestamos_service = FakePrestamoServiceConContador()
+    service = ReservaService(repo, prestamos_service, reputacion)
+
+    inicio, fin = _horario_futuro(horas_inicio=10)
+
+    # Puede crear hasta `limite` reservas
+    for i in range(limite):
+        datos = CrearReservaDTO(
+            usuario_id=u_id,
+            recurso_id=uuid4(),
+            fecha_inicio=inicio + timedelta(days=i),
+            fecha_fin=fin + timedelta(days=i),
+        )
+        service.crear_reserva(datos)
+
+    # La siguiente reserva que supere el límite debe ser rechazada con ValueError
+    datos_extra = CrearReservaDTO(
+        usuario_id=u_id,
+        recurso_id=uuid4(),
+        fecha_inicio=inicio + timedelta(days=limite),
+        fecha_fin=fin + timedelta(days=limite),
+    )
+    with pytest.raises(ValueError, match=f"has alcanzado el límite de {limite} operaciones activas"):
+        service.crear_reserva(datos_extra)
+
+
+def test_limite_operaciones_suma_reservas_activas_y_prestamos_en_curso():
+    u_id = uuid4()
+    # NORMAL tiene límite 2
+    reputacion = FakeReputacionService(niveles={u_id: NivelReputacion.NORMAL})
+    repo = FakeReservaRepository()
+    # Ya tiene 1 préstamo en curso
+    prestamos_service = FakePrestamoServiceConContador(prestamos_en_curso={u_id: 1})
+    service = ReservaService(repo, prestamos_service, reputacion)
+
+    inicio, fin = _horario_futuro(horas_inicio=10)
+
+    # 1 reserva permitida (1 préstamo + 1 reserva = 2)
+    datos1 = CrearReservaDTO(
+        usuario_id=u_id,
+        recurso_id=uuid4(),
+        fecha_inicio=inicio,
+        fecha_fin=fin,
+    )
+    service.crear_reserva(datos1)
+
+    # 2da reserva supera el límite de 2 operaciones activas simultáneas
+    datos2 = CrearReservaDTO(
+        usuario_id=u_id,
+        recurso_id=uuid4(),
+        fecha_inicio=inicio + timedelta(days=1),
+        fecha_fin=fin + timedelta(days=1),
+    )
+    with pytest.raises(ValueError, match="has alcanzado el límite de 2 operaciones activas"):
+        service.crear_reserva(datos2)
+
+
 

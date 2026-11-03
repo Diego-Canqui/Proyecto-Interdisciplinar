@@ -66,6 +66,12 @@ class AutenticacionService:
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas"
             )
 
+        if not usuario.estado:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="La cuenta de usuario está desactivada",
+            )
+
         # Generar JWT
         token = self._generar_token(usuario)
 

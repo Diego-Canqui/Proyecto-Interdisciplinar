@@ -20,7 +20,7 @@ VALUES (
     '999888777',
     '$2b$12$TaI2pgOiHokBQ5G2g4V7VuwYNwQ4zlzuigAAayDhBAze62LOMkixy',
     true,
-    ARRAY['ADMINISTRADOR_SISTEMA', 'GESTOR_ALMACEN', 'DOCENTE', 'ESTUDIANTE']
+    ARRAY['ADMINISTRADOR_SISTEMA', 'GESTOR_ALMACEN']
 ) ON CONFLICT (correo) DO UPDATE 
 SET password_hash = EXCLUDED.password_hash,
     roles = EXCLUDED.roles,

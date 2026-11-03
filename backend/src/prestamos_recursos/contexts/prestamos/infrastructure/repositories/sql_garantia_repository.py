@@ -59,6 +59,7 @@ class SqlGarantiaRepository(GarantiaRepository):
         El commit es manejado por la capa de unidad de trabajo del servicio.
         """
         self._to_model(garantia)
+        self._session.flush()
 
     def obtener_por_id(self, id: UUID) -> Garantia | None:
         modelo = self._session.get(GarantiaModel, id)

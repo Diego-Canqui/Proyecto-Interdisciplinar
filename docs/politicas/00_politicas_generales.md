@@ -50,12 +50,14 @@ Cada integrante cuenta con su propio documento detallado en esta carpeta:
 ## 4. Políticas Transversales de Seguridad y Roles
 
 1. **Roles del sistema (`RolUsuario`):**
-   - `ESTUDIANTE` y `DOCENTE`: Usuarios solicitantes. Pueden consultar el catálogo, solicitar reservas, cancelar sus propias reservas, ver sus préstamos/checklists y solicitar renovación.
-   - `GESTOR_ALMACEN` y `ADMINISTRADOR_SISTEMA`: Roles de gestión. Tienen acceso global a todas las reservas y préstamos, registran y actualizan recursos, confirman reservas pendientes, inician préstamos, formalizan entregas con garantía/checklist, procesan devoluciones y administran reputación, sanciones y excepciones académicas.
+   - `ESTUDIANTE`, `DOCENTE` y `PERSONAL_ADMINISTRATIVO`: Usuarios solicitantes. Pueden consultar el catálogo, solicitar reservas, cancelar sus propias reservas, ver sus préstamos/checklists y consultar su reputación personal.
+   - `GESTOR_ALMACEN` y `ADMINISTRADOR_SISTEMA`: Roles de gestión. Tienen acceso global a todas las reservas y préstamos, registran y actualizan recursos, confirman reservas pendientes, inician préstamos, formalizan entregas con garantía/checklist, cancelan préstamos no recogidos en ventanilla, procesan devoluciones y administran reputación, sanciones y excepciones académicas.
+   - **Segregación de funciones (Spec 006):** `GESTOR_ALMACEN` y `ADMINISTRADOR_SISTEMA` operan el sistema pero **no pueden solicitar reservas ni préstamos para sí mismos** (`403 Forbidden`). Además, `GESTOR_ALMACEN` solo puede crear usuarios con roles solicitantes (`ESTUDIANTE`, `DOCENTE`, `PERSONAL_ADMINISTRATIVO`), mientras que `ADMINISTRADOR_SISTEMA` puede crear usuarios con cualquiera de los 5 roles, cambiar roles (`PATCH /usuarios/{id}/rol`), activar/desactivar cuentas (`PATCH /usuarios/{id}/estado`) y eliminar usuarios sin operaciones activas (`DELETE /usuarios/{id}`), con reglas de autoprotección (`409 Conflict`) para no auto-degradarse, auto-desactivarse ni auto-eliminarse.
 
 2. **Autenticación y credenciales:**
    - Contraseñas almacenadas únicamente como hash `bcrypt` (coste 12).
    - Sesiones mediante token JWT (`HS256`) firmado con `JWT_SECRET` del entorno y enviado en la cabecera `Authorization: Bearer <token>`.
+   - Cuentas inactivas (`estado = False`): rechazadas con código `403 Forbidden` (`"La cuenta de usuario está desactivada"`) tanto al iniciar sesión en `/auth/login` como al verificar cualquier petición autenticada con token previo en `get_current_user` (Spec 006).
    - Protección contra fuerza bruta mediante `slowapi` (rate limiting en login y registro).
 
 ---
@@ -63,10 +65,14 @@ Cada integrante cuenta con su propio documento detallado en esta carpeta:
 ## 5. Resumen del Flujo Completo entre los 4 Contextos
 
 1. **Catálogo (`catalogo`):** El gestor registra el recurso con su ficha técnica y queda en estado `DISPONIBLE`.
-2. **Reserva (`reservas`):** El usuario solicita reservar el recurso en un rango de fechas. Si el horario está libre, pasa directo a `CONFIRMADA`. Si está ocupado por otra reserva confirmada, entra en `PENDIENTE` (lista de espera ordenada de mayor a menor reputación consultando a `identidad_reputacion`).
-3. **Inicio de Préstamo (`reservas` → `prestamos` → `catalogo`):** Cuando el usuario se presenta, el gestor inicia el préstamo desde la reserva confirmada. El préstamo nace en estado `ACTIVO` y el recurso pasa a `EN_USO`.
-4. **Entrega Física (`prestamos` → `identidad_reputacion`):** En ventanilla, el gestor registra la `Garantia` (carné, DNI o depósito) y confirma el `Checklist` de salida. El préstamo pasa a `ENTREGADO`. Si el usuario recogió en la fecha pactada, recibe +10 puntos de reputación.
-5. **Devolución (`prestamos` → `catalogo` + `identidad_reputacion`):** Al devolver el bien, el gestor registra el `Checklist` de retorno.
+2. **Reserva (`reservas`):** El usuario solicita reservar el recurso en un rango de fechas. Debe tener rol solicitante (`403` si tiene rol de gestión), no tener sanción bloqueante activa (`409`), no superar su cupo de operaciones activas simultáneas según su `NivelReputacion` (`BAJO`: 1, `NORMAL`: 2, `BUENO`: 3, `EXCELENTE`: 5) sumando reservas activas y préstamos en curso, y la duración máxima de toda reserva es de **7 días** (`409` si se supera). Si el horario está libre, pasa directo a `CONFIRMADA`. Si está ocupado por otra reserva confirmada, entra en `PENDIENTE` (lista de espera ordenada de mayor a menor reputación consultando a `identidad_reputacion`). Al cancelar una reserva confirmada, la cola promueve al mejor candidato saltando a quienes tengan sanciones activas.
+3. **Inicio de Préstamo (`reservas` → `prestamos` → `catalogo`):** Cuando el usuario se presenta, el gestor inicia el préstamo desde la reserva confirmada (verificando que el titular no tenga sanción bloqueante activa sobrevenida). El préstamo nace en estado `ACTIVO` y el recurso pasa a `EN_USO`.
+4. **Entrega Física y Cancelación en Ventanilla (`prestamos` → `catalogo` + `identidad_reputacion`):** Mientras el préstamo está en estado `ACTIVO` (antes de la entrega física), el gestor puede:
+   - **Completar la entrega:** Registra la `Garantia` (carné, DNI o depósito) y el `Checklist` de salida con fotos. El préstamo pasa a `ENTREGADO`. Si el usuario recogió en la fecha pactada, recibe +10 puntos de reputación.
+   - **Cancelar el préstamo en ventanilla (`POST /prestamos/{id}/cancelar`, Spec 006):** Si el solicitante no se presenta o desiste antes de la entrega física, el gestor cancela el préstamo. El préstamo pasa a `CANCELADO` y el recurso vuelve inmediatamente a `DISPONIBLE` en el catálogo sin penalizar la reputación del usuario.
+5. **Devolución (`prestamos` → `catalogo` + `identidad_reputacion`):** Solo se habilita en ventanilla para préstamos en estado `ENTREGADO` o `VENCIDO`. Al devolver el bien, el gestor registra el `Checklist` de retorno.
    - Si fue puntual y sin daños: el préstamo pasa a `DEVUELTO`, el recurso vuelve a `DISPONIBLE` y el usuario gana +15 puntos de reputación.
-   - Si hubo retraso: se aplica sanción `TARDANZA` (-20 pts base y -5 pts por día de mora).
-   - Si hubo daños físicos: se aplica sanción `DANO_PARCIAL` (-100 pts) y el recurso pasa automáticamente a `MANTENIMIENTO`.
+   - Si hubo retraso: se aplica sanción `DEVOLUCION_TARDIA` (-20 pts base y -5 pts por día de mora, 15 días de bloqueo).
+   - Si hubo daños físicos: según la gravedad se aplica sanción `DANO_LEVE` (-50 pts, 7 días), `DANO_GRAVE` (-150 pts, 30 días) o `DANO_TOTAL` (-300 pts, 180 días), pasando el recurso automáticamente a `MANTENIMIENTO` o `FUERA_DE_SERVICIO`.
+   - Si no asistió a recoger una reserva confirmada: sanción `INASISTENCIA_RESERVA` (-30 pts, 7 días).
+

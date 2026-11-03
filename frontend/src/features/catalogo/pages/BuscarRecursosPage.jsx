@@ -428,22 +428,24 @@ export default function BuscarRecursosPage() {
                     <div><strong>Categoría:</strong> {fichaTecnica.categoria || "—"}</div>
                   </div>
 
-                  {/* Acción para todos los usuarios: Reservar */}
-                  <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--borde)" }}>
-                    {recursoSeleccionado.estado === "DISPONIBLE" ? (
-                      <Link
-                        to={`/reservas?recursoId=${recursoSeleccionado.id}`}
-                        className="boton boton--primario boton--bloque"
-                        style={{ textAlign: "center", textDecoration: "none" }}
-                      >
-                        🗓️ Solicitar Reserva de este Recurso
-                      </Link>
-                    ) : (
-                      <div className="alerta alerta--aviso" style={{ fontSize: "0.875rem", margin: 0 }}>
-                        Este equipo no se encuentra disponible para préstamo inmediato (Estado: {recursoSeleccionado.estado}).
-                      </div>
-                    )}
-                  </div>
+                  {/* Acción para usuarios solicitantes: Reservar */}
+                  {!esGestion && (
+                    <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--borde)" }}>
+                      {recursoSeleccionado.estado === "DISPONIBLE" ? (
+                        <Link
+                          to={`/reservas?recursoId=${recursoSeleccionado.id}`}
+                          className="boton boton--primario boton--bloque"
+                          style={{ textAlign: "center", textDecoration: "none" }}
+                        >
+                          🗓️ Solicitar Reserva de este Recurso
+                        </Link>
+                      ) : (
+                        <div className="alerta alerta--aviso" style={{ fontSize: "0.875rem", margin: 0 }}>
+                          Este equipo no se encuentra disponible para préstamo inmediato (Estado: {recursoSeleccionado.estado}).
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Acciones de gestión de almacén: cambiar estado */}
                   {esGestion && (

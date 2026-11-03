@@ -85,6 +85,11 @@ def solicitar_reserva(
     servicio: ServicioReservas,
     usuario: UsuarioAutenticado,
 ) -> ReservaDTO:
+    if _tiene_rol_gestion(usuario):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="las cuentas de gestión y administración no pueden solicitar reservas para sí mismas",
+        )
     if datos.usuario_id != usuario.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

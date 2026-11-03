@@ -9,6 +9,12 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.entities.usuario im
 from prestamos_recursos.contexts.identidad_reputacion.domain.repositories.usuario_repository import (
     UsuarioRepository,
 )
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.excepcion_academica_model import (
+    ExcepcionAcademicaModel,
+)
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.perfil_reputacion_model import (
+    PerfilReputacionModel,
+)
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.usuario_model import (
     UsuarioModel,
 )
@@ -51,3 +57,31 @@ class SqlUsuarioRepository(UsuarioRepository):
     def listar(self) -> list[Usuario]:
         modelos = self._session.scalars(select(UsuarioModel)).all()
         return [m.to_entity() for m in modelos]
+
+    def eliminar(self, id: UUID) -> bool:
+        modelo = self._session.get(UsuarioModel, id)
+        if modelo is None:
+            return False
+
+        # Eliminar excepciones académicas asociadas en el contexto
+        excepciones = self._session.scalars(
+            select(ExcepcionAcademicaModel).where(ExcepcionAcademicaModel.usuario_id == id)
+        ).all()
+        for exc in excepciones:
+            self._session.delete(exc)
+
+        # Eliminar perfil de reputación (con sus sanciones)
+        perfil = self._session.scalar(
+            select(PerfilReputacionModel).where(PerfilReputacionModel.usuario_id == id)
+        )
+        if perfil is not None:
+            for sancion in perfil.sanciones:
+                self._session.delete(sancion)
+            self._session.delete(perfil)
+
+        self._session.delete(modelo)
+        # La transacción la cierra get_session al final de la petición (D13):
+        # aquí solo se deja el cambio listo y visible en la sesión (flush)
+        self._session.flush()
+        return True
+

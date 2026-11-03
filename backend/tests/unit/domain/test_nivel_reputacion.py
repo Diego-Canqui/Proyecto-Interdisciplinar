@@ -34,6 +34,15 @@ class TestNivelReputacion:
         assert issubclass(NivelReputacion, str)
         assert isinstance(NivelReputacion.BAJO, str)
 
+    def test_limite_operaciones_por_nivel(self):
+        """RF-04: Límites de operaciones activas simultáneas según el nivel."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import NivelReputacion
+
+        assert NivelReputacion.BAJO.limite_operaciones == 1
+        assert NivelReputacion.NORMAL.limite_operaciones == 2
+        assert NivelReputacion.BUENO.limite_operaciones == 3
+        assert NivelReputacion.EXCELENTE.limite_operaciones == 5
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

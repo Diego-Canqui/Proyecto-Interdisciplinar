@@ -177,12 +177,12 @@ Rutas existentes en `frontend/src/App.jsx`: `/login`, `/registro`, `/usuarios`, 
 | `/recursos` | Buscar recursos | sí | sí | sí |
 | `/reservas` | Mis reservas / Reservas | sí | sí | sí |
 | `/historial` | Historial / Préstamos | sí | sí | sí |
-| `/reputacion` | Mi reputación / Sanciones | sí | sí | sí |
+| `/reputacion` | Mi reputación / Sanciones | sí | no | no |
 | `/usuarios` | Usuarios | no | sí | sí |
 | `/gestion-reputacion` | Gestión de reputación | no | sí | sí |
 
 - `GESTOR_ALMACEN` ve las acciones de gestión de usuarios (`/usuarios`) y tiene una ruta propia para reputación (`/gestion-reputacion`); las acciones de gestión de préstamos siguen siendo de su propio contexto dentro de las mismas rutas.
-- `ADMINISTRADOR_SISTEMA` ve todo, con la misma barra de navegación que `GESTOR_ALMACEN`.
+- ADMINISTRADOR_SISTEMA comparte la misma barra de navegación que GESTOR_ALMACEN (ambos ven /gestion-reputacion y /usuarios, y no ven /reputacion al no ser roles solicitantes).
 - `PERSONAL_ADMINISTRATIVO` comparte exactamente la misma visibilidad que `ESTUDIANTE` y `DOCENTE`.
 - **Rótulo largo en la barra**: «Gestión de reputación» es el rótulo más largo de la navegación. La guía no fija una longitud máxima para los rótulos de enlace (solo que sean únicos), pero debe tenerse en cuenta que `.navbar__enlaces` no envuelve líneas (`flex-wrap`). Por debajo de 900px la barra oculta los enlaces (deuda aceptada); en anchos intermedios (900–1100px) se vigila que no desborde horizontalmente (D8, R8).
 - **Hoy no existen guardas por rol en el frontend**: esta tabla es solo navegación visible, no
@@ -339,6 +339,8 @@ Mientras llega la respuesta. Texto claro, sin spinners caseros.
 | Excepción | `PROGRAMADA` | `insignia--info` | azul |
 | Excepción | `VENCIDA` | `insignia--aviso` | ámbar |
 | Excepción | `ANULADA` | `insignia--neutra` | gris |
+| Usuario | `ACTIVO` | `insignia--exito` | verde |
+| Usuario | `INACTIVO` | `insignia--error` | rojo |
 
 Regla: **el color nunca es la única señal**; la insignia siempre muestra el estado como texto.
 
@@ -433,3 +435,5 @@ Cambios registrados:
   su `<main>` anidado y estilos en línea (§6), adoptando el layout compartido y las clases de
   `global.css`. Se añade el estado `ENTREGADO` a la tabla de estados de préstamo con insignia
   `insignia--info` (§9). Spec 005.
+- **2026-11-03** — Segregación de funciones en navegación (§6): `/reputacion` pasa a ser visible solo para roles solicitantes (`ESTUDIANTE`, `DOCENTE`, `PERSONAL_ADMINISTRATIVO`) y se oculta para `GESTOR_ALMACEN` y `ADMINISTRADOR_SISTEMA`. Se documentan en §9 las insignias de estado de cuenta de usuario (`ACTIVO`, `INACTIVO`). Spec 006.
+

@@ -1,5 +1,8 @@
 import { apiClient } from "../../lib/apiClient.js";
 
+export const cancelarPrestamo = (idPrestamo) =>
+  apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/cancelar`);
+
 export const registrarDevolucion = (idPrestamo, datosDevolucion = null) =>
   datosDevolucion
     ? apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/devolucion`, datosDevolucion)

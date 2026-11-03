@@ -28,7 +28,7 @@ class SqlChecklistRepository(ChecklistRepository):
             tipo=modelo.tipo,
             fecha_inspeccion=modelo.fecha_inspeccion,
             observaciones=modelo.observaciones,
-            fotos_urls=modelo.fotos_urls or [],
+            fotos_urls=list(modelo.fotos_urls) if modelo.fotos_urls else [],
             completo=modelo.completo,
         )
 
@@ -41,14 +41,14 @@ class SqlChecklistRepository(ChecklistRepository):
         modelo.tipo = checklist.tipo
         modelo.fecha_inspeccion = checklist.fecha_inspeccion
         modelo.observaciones = checklist.observaciones
-        modelo.fotos_urls = checklist.fotos_urls
+        modelo.fotos_urls = list(checklist.fotos_urls)
         modelo.completo = checklist.completo
         return modelo
 
     def guardar(self, checklist: Checklist) -> None:
         """Persistir o actualizar un checklist en la base de datos."""
         self._to_model(checklist)
-        # Session commit handled by caller.
+        self._session.flush()
 
     def obtener_por_id(self, id: UUID) -> Checklist | None:
         modelo = self._session.get(ChecklistModel, id)

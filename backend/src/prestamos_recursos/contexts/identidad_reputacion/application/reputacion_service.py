@@ -123,6 +123,53 @@ class ReputacionService:
         )
         return ElegibilidadDTO(elegible=False, razon=razon)
 
+    def consultar_elegibilidad_lectura(self, usuario_id: UUID) -> ElegibilidadDTO:
+        """
+        Consulta la elegibilidad del usuario en modo solo lectura (RF-03).
+
+        No crea ni persiste el perfil si no existe en la base de datos para no
+        generar perfiles huérfanos ni errores de FK.
+        """
+        perfil = self._perfil_reputacion_repository.obtener_por_usuario(usuario_id)
+        if perfil is None:
+            return ElegibilidadDTO(elegible=True)
+
+        excepciones_vigentes = self._excepcion_academica_repository.obtener_vigentes_por_usuario(
+            usuario_id
+        )
+        sancion_bloqueante = perfil.sancion_bloqueante(excepciones_vigentes)
+        if sancion_bloqueante is None:
+            return ElegibilidadDTO(elegible=True)
+
+        razon = (
+            f"tienes una sanción vigente de tipo {sancion_bloqueante.tipo.value} "
+            f"hasta {sancion_bloqueante.fecha_fin:%Y-%m-%d}"
+        )
+        return ElegibilidadDTO(elegible=False, razon=razon)
+
+    def consultar_nivel_lectura(self, usuario_id: UUID) -> NivelReputacion:
+        """
+        Consulta el nivel de reputación en modo solo lectura (RF-04).
+
+        Si no tiene perfil, retorna NORMAL por defecto sin insertar en la base de datos.
+        """
+        perfil = self._perfil_reputacion_repository.obtener_por_usuario(usuario_id)
+        if perfil is None:
+            return NivelReputacion.NORMAL
+        return perfil.nivel
+
+    def consultar_puntaje_lectura(self, usuario_id: UUID) -> int:
+        """
+        Consulta el puntaje de reputación en modo solo lectura (RF-04).
+
+        Si no tiene perfil, retorna 500 por defecto sin insertar en la base de datos.
+        """
+        perfil = self._perfil_reputacion_repository.obtener_por_usuario(usuario_id)
+        if perfil is None:
+            return 500
+        return perfil.puntaje.puntos
+
+
     def obtener_perfil_gestion(self, usuario_id: UUID) -> PerfilGestionDTO:
         """
         Consulta de solo lectura para los roles de gestión (RF-04).

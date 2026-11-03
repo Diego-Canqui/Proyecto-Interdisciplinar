@@ -28,6 +28,15 @@ function fechaLocalMinima() {
   return ahora.toISOString().slice(0, 16);
 }
 
+function calcularFechaMaxima(fechaInicioStr) {
+  if (!fechaInicioStr) return undefined;
+  const fecha = new Date(fechaInicioStr);
+  if (Number.isNaN(fecha.getTime())) return undefined;
+  const fechaMax = new Date(fecha.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const fechaAjustada = new Date(fechaMax.getTime() - fechaMax.getTimezoneOffset() * 60000);
+  return fechaAjustada.toISOString().slice(0, 16);
+}
+
 function mostrarFecha(fecha) {
   return new Intl.DateTimeFormat("es-PE", {
     dateStyle: "medium",
@@ -161,6 +170,11 @@ export default function MisReservasPage() {
       return;
     }
 
+    if (fin - inicio > 7 * 24 * 60 * 60 * 1000) {
+      setError("La duración máxima de una reserva es de 7 días.");
+      return;
+    }
+
     setEnviando(true);
     try {
       const reservaCreada = await solicitarReserva({
@@ -258,10 +272,12 @@ export default function MisReservasPage() {
   return (
     <section aria-labelledby="titulo-reservas">
       <header className="pagina__cabecera">
-        <h1 id="titulo-reservas" className="pagina__titulo">Mis reservas</h1>
+        <h1 id="titulo-reservas" className="pagina__titulo">
+          {esGestion ? "Gestión de reservas" : "Mis reservas"}
+        </h1>
         <p className="pagina__subtitulo">
           {esGestion
-            ? "Gestiona las solicitudes de los usuarios y reserva recursos del catálogo."
+            ? "Supervisa, confirma, inicia el préstamo o cancela las solicitudes de reserva de los usuarios."
             : "Solicita un recurso y revisa el estado de tus reservas activas."}
         </p>
       </header>
@@ -269,72 +285,78 @@ export default function MisReservasPage() {
       {error && <p className="alerta alerta--error" role="alert">{error}</p>}
       {exito && <p className="alerta alerta--exito" role="status">{exito}</p>}
 
-      <section className="tarjeta" aria-labelledby="titulo-nueva-reserva">
-        <div className="tarjeta__cabecera" id="titulo-nueva-reserva">Solicitar una reserva</div>
-        <div className="tarjeta__cuerpo">
-          {recursos.length === 0 ? (
-            <div className="estado-vacio">
-              <p className="estado-vacio__titulo">No hay recursos para seleccionar</p>
-              <p>Vuelve a intentarlo cuando el catálogo tenga recursos disponibles.</p>
-            </div>
-          ) : (
-            <form className="formulario" onSubmit={enviarSolicitud}>
-              <div className="campo">
-                <label className="campo__etiqueta" htmlFor="recurso-reserva">Recurso</label>
-                <select
-                  className="campo__control"
-                  id="recurso-reserva"
-                  value={recursoId}
-                  onChange={(evento) => setRecursoId(evento.target.value)}
-                  required
-                >
-                  <option value="">Selecciona un recurso</option>
-                  {recursos.map((recurso) => (
-                    <option key={recurso.id} value={recurso.id}>
-                      {recurso.nombre} — {recurso.categoria} ({recurso.estado})
-                    </option>
-                  ))}
-                </select>
-                <span className="campo__ayuda">
-                  Si el horario se cruza con otra reserva, el sistema rechazará la solicitud.
-                </span>
+      {!esGestion && (
+        <section className="tarjeta" aria-labelledby="titulo-nueva-reserva">
+          <div className="tarjeta__cabecera" id="titulo-nueva-reserva">Solicitar una reserva</div>
+          <div className="tarjeta__cuerpo">
+            {recursos.length === 0 ? (
+              <div className="estado-vacio">
+                <p className="estado-vacio__titulo">No hay recursos para seleccionar</p>
+                <p>Vuelve a intentarlo cuando el catálogo tenga recursos disponibles.</p>
               </div>
+            ) : (
+              <form className="formulario" onSubmit={enviarSolicitud}>
+                <div className="campo">
+                  <label className="campo__etiqueta" htmlFor="recurso-reserva">Recurso</label>
+                  <select
+                    className="campo__control"
+                    id="recurso-reserva"
+                    value={recursoId}
+                    onChange={(evento) => setRecursoId(evento.target.value)}
+                    required
+                  >
+                    <option value="">Selecciona un recurso</option>
+                    {recursos.map((recurso) => (
+                      <option key={recurso.id} value={recurso.id}>
+                        {recurso.nombre} — {recurso.categoria} ({recurso.estado})
+                      </option>
+                    ))}
+                  </select>
+                  <span className="campo__ayuda">
+                    Si el horario se cruza con otra reserva, el sistema rechazará la solicitud.
+                  </span>
+                </div>
 
-              <div className="campo">
-                <label className="campo__etiqueta" htmlFor="fecha-inicio">Fecha y hora de inicio</label>
-                <input
-                  className="campo__control"
-                  id="fecha-inicio"
-                  type="datetime-local"
-                  min={fechaLocalMinima()}
-                  value={fechaInicio}
-                  onChange={(evento) => setFechaInicio(evento.target.value)}
-                  required
-                />
-              </div>
+                <div className="campo">
+                  <label className="campo__etiqueta" htmlFor="fecha-inicio">Fecha y hora de inicio</label>
+                  <input
+                    className="campo__control"
+                    id="fecha-inicio"
+                    type="datetime-local"
+                    min={fechaLocalMinima()}
+                    value={fechaInicio}
+                    onChange={(evento) => setFechaInicio(evento.target.value)}
+                    required
+                  />
+                </div>
 
-              <div className="campo">
-                <label className="campo__etiqueta" htmlFor="fecha-fin">Fecha y hora de fin</label>
-                <input
-                  className="campo__control"
-                  id="fecha-fin"
-                  type="datetime-local"
-                  min={fechaInicio || fechaLocalMinima()}
-                  value={fechaFin}
-                  onChange={(evento) => setFechaFin(evento.target.value)}
-                  required
-                />
-              </div>
+                <div className="campo">
+                  <label className="campo__etiqueta" htmlFor="fecha-fin">Fecha y hora de fin</label>
+                  <input
+                    className="campo__control"
+                    id="fecha-fin"
+                    type="datetime-local"
+                    min={fechaInicio || fechaLocalMinima()}
+                    max={fechaInicio ? calcularFechaMaxima(fechaInicio) : undefined}
+                    value={fechaFin}
+                    onChange={(evento) => setFechaFin(evento.target.value)}
+                    required
+                  />
+                  <span className="campo__ayuda">
+                    La duración máxima de una reserva es de 7 días.
+                  </span>
+                </div>
 
-              <div className="formulario__acciones">
-                <button className="boton boton--primario" type="submit" disabled={enviando}>
-                  {enviando ? "Enviando solicitud..." : "Solicitar reserva"}
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      </section>
+                <div className="formulario__acciones">
+                  <button className="boton boton--primario" type="submit" disabled={enviando}>
+                    {enviando ? "Enviando solicitud..." : "Solicitar reserva"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </section>
+      )}
 
       <section aria-labelledby="titulo-reservas-activas">
         <header className="pagina__cabecera">

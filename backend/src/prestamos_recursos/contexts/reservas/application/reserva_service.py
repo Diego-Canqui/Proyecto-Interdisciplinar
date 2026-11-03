@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
+    NivelReputacion,
+)
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.reservas.application.dto.reserva_dto import (
     CrearReservaDTO,
@@ -40,13 +43,114 @@ class ReservaService:
     def _obtener_puntaje_usuario(self, usuario_id: UUID) -> int:
         if self._reputacion_service is None:
             return 500
+        if hasattr(self._reputacion_service, "consultar_puntaje_lectura"):
+            try:
+                return self._reputacion_service.consultar_puntaje_lectura(usuario_id)
+            except Exception:  # noqa: BLE001
+                return 500
         try:
             perfil = self._reputacion_service.obtener_perfil(usuario_id)
             return perfil.puntaje
         except Exception:  # noqa: BLE001
             return 500
 
+    def contar_reservas_activas_usuario(self, id_usuario: UUID) -> int:
+        reservas = self._reserva_repository.obtener_por_usuario(id_usuario)
+        return sum(
+            1
+            for r in reservas
+            if r.estado in {EstadoReserva.PENDIENTE, EstadoReserva.CONFIRMADA}
+            and r.esta_vigente()
+        )
+
+    def _es_usuario_elegible(self, usuario_id: UUID) -> bool:
+        if self._reputacion_service is None:
+            return True
+        if hasattr(self._reputacion_service, "consultar_elegibilidad_lectura"):
+            try:
+                elegibilidad = self._reputacion_service.consultar_elegibilidad_lectura(usuario_id)
+                return bool(elegibilidad.elegible)
+            except Exception:  # noqa: BLE001
+                return True
+        if hasattr(self._reputacion_service, "obtener_elegibilidad"):
+            try:
+                elegibilidad = self._reputacion_service.obtener_elegibilidad(usuario_id)
+                return bool(elegibilidad.elegible)
+            except Exception:  # noqa: BLE001
+                return True
+        if hasattr(self._reputacion_service, "es_elegible_para_prestamo"):
+            try:
+                return bool(self._reputacion_service.es_elegible_para_prestamo(usuario_id))
+            except Exception:  # noqa: BLE001
+                return True
+        return True
+
+    def _verificar_elegibilidad_usuario(self, usuario_id: UUID) -> None:
+        if self._reputacion_service is None:
+            return
+        if hasattr(self._reputacion_service, "consultar_elegibilidad_lectura"):
+            elegibilidad = self._reputacion_service.consultar_elegibilidad_lectura(usuario_id)
+            if not elegibilidad.elegible:
+                raise ValueError(
+                    elegibilidad.razon
+                    or "el usuario tiene una sanción vigente que impide realizar préstamos o reservas"
+                )
+            return
+        if hasattr(self._reputacion_service, "obtener_elegibilidad"):
+            elegibilidad = self._reputacion_service.obtener_elegibilidad(usuario_id)
+            if not elegibilidad.elegible:
+                raise ValueError(
+                    elegibilidad.razon
+                    or "el usuario tiene una sanción vigente que impide realizar préstamos o reservas"
+                )
+            return
+        if (
+            hasattr(self._reputacion_service, "es_elegible_para_prestamo")
+            and not self._reputacion_service.es_elegible_para_prestamo(usuario_id)
+        ):
+            raise ValueError(
+                "el usuario tiene una sanción vigente que impide realizar préstamos o reservas"
+            )
+
+    def _verificar_limite_operaciones_simultaneas(self, usuario_id: UUID) -> None:
+        nivel = NivelReputacion.NORMAL
+        if self._reputacion_service is not None:
+            if hasattr(self._reputacion_service, "consultar_nivel_lectura"):
+                try:
+                    nivel = self._reputacion_service.consultar_nivel_lectura(usuario_id)
+                except Exception:  # noqa: BLE001
+                    nivel = NivelReputacion.NORMAL
+            elif hasattr(self._reputacion_service, "obtener_perfil"):
+                try:
+                    perfil = self._reputacion_service.obtener_perfil(usuario_id)
+                    valor_nivel = getattr(perfil, "nivel", None)
+                    if isinstance(valor_nivel, str):
+                        nivel = NivelReputacion(valor_nivel)
+                    elif isinstance(valor_nivel, NivelReputacion):
+                        nivel = valor_nivel
+                    else:
+                        nivel = NivelReputacion.NORMAL
+                except Exception:  # noqa: BLE001
+                    nivel = NivelReputacion.NORMAL
+
+        limite = nivel.limite_operaciones
+        reservas_activas = self.contar_reservas_activas_usuario(usuario_id)
+        try:
+            prestamos_en_curso = (
+                self._prestamo_service.contar_prestamos_en_curso(usuario_id)
+                if hasattr(self._prestamo_service, "contar_prestamos_en_curso")
+                else 0
+            )
+        except Exception:  # noqa: BLE001
+            prestamos_en_curso = 0
+        if reservas_activas + prestamos_en_curso >= limite:
+            raise ValueError(
+                f"has alcanzado el límite de {limite} operaciones activas simultáneas "
+                f"permitido para tu nivel de reputación ({nivel.value})"
+            )
+
     def crear_reserva(self, datos: CrearReservaDTO) -> ReservaDTO:
+        self._verificar_elegibilidad_usuario(datos.usuario_id)
         reserva = Reserva.crear(**datos.model_dump())
         reservas_activas = self._reserva_repository.obtener_activas_por_recurso(
             reserva.recurso_id
@@ -56,6 +160,8 @@ class ReservaService:
             for otra in reservas_activas
         ):
             raise ValueError("ya tienes una reserva activa para este recurso en ese horario")
+
+        self._verificar_limite_operaciones_simultaneas(datos.usuario_id)
 
         if any(
             otra.estado == EstadoReserva.CONFIRMADA and reserva.se_superpone_con(otra)
@@ -81,6 +187,7 @@ class ReservaService:
 
     def confirmar_reserva(self, id_reserva: UUID) -> ReservaDTO:
         reserva = self._buscar_reserva(id_reserva)
+        self._verificar_elegibilidad_usuario(reserva.usuario_id)
         reservas_activas = self._reserva_repository.obtener_activas_por_recurso(
             reserva.recurso_id
         )
@@ -113,6 +220,7 @@ class ReservaService:
                 if c.esta_vigente()
                 and Reserva._a_utc(c.fecha_inicio) < fin_liberado
                 and inicio_liberado < Reserva._a_utc(c.fecha_fin)
+                and self._es_usuario_elegible(c.usuario_id)
             ]
             if candidatas:
                 puntajes = {
@@ -138,6 +246,8 @@ class ReservaService:
         if reserva is None or reserva.estado != EstadoReserva.CONFIRMADA:
             return False
 
+        self._verificar_elegibilidad_usuario(reserva.usuario_id)
+
         creado = self._prestamo_service.solicitar_prestamo(
             id_reserva=reserva.id,
             id_usuario=reserva.usuario_id,
@@ -151,6 +261,7 @@ class ReservaService:
         reserva.convertir_a_prestamo()
         self._reserva_repository.guardar(reserva)
         return True
+
 
     def obtener_cola_espera(self, id_recurso: UUID) -> list[ReservaDTO]:
         reservas = self._reserva_repository.obtener_cola_por_recurso(id_recurso)

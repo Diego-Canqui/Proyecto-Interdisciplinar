@@ -24,3 +24,8 @@ class UsuarioRepository(ABC):
     @abstractmethod
     def listar(self) -> list[Usuario]:
         ...
+
+    @abstractmethod
+    def eliminar(self, id: UUID) -> bool:
+        ...
+

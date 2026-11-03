@@ -20,7 +20,8 @@
    - Consulta de disponibilidad inmediata (`GET /recursos/{id_recurso}/disponibilidad`).
    - Cambio de estado operativo (`PATCH /recursos/{id_recurso}/estado`) entre `DISPONIBLE`, `EN_USO`, `MANTENIMIENTO` y `FUERA_DE_SERVICIO`.
 4. **Interfaz de usuario (`/recursos`):**
-   - Buscador con filtro en tiempo real, listado de tarjetas con insignias de color según el estado, panel lateral de ficha técnica con fotografía, enlace directo para reservar el recurso (`/reservas?recursoId=...`), formulario de alta de recursos y selector de cambio de estado para personal de gestión.
+   - Buscador con filtro en tiempo real, listado de tarjetas con insignias de color según el estado, panel lateral de ficha técnica con fotografía, enlace directo para reservar el recurso (`/reservas?recursoId=...`) disponible exclusivamente para roles solicitantes (oculto para roles de gestión por segregación de funciones, Spec 006), formulario de alta de recursos y selector de cambio de estado para personal de gestión.
+
 
 ---
 
@@ -43,6 +44,7 @@ Todo recurso se encuentra siempre en uno de estos 4 estados:
 - **Transiciones automáticas desde el contexto `prestamos`:**
   - Cuando un gestor convierte una reserva en préstamo (`PrestamoService.solicitar_prestamo`), verifica que el recurso esté `DISPONIBLE` y lo pasa automáticamente a **`EN_USO`**.
   - Cuando se procesa la devolución (`PrestamoService.procesar_devolucion`), si no se detectaron daños vuelve a **`DISPONIBLE`**; si se detectaron daños físicos (`danos_detectados = True`), pasa automáticamente a **`MANTENIMIENTO`**.
+  - Cuando un préstamo en estado `ACTIVO` (aún no entregado físicamente) es cancelado en ventanilla (`PrestamoService.cancelar_prestamo`), el recurso vuelve automáticamente de `EN_USO` a **`DISPONIBLE`** sin alterar la reputación (Spec 006).
 
 ---
 
@@ -75,4 +77,5 @@ Todo recurso se encuentra siempre en uno de estos 4 estados:
 - **`presentation/recurso_controller.py`**:
   - `GET /recursos` (búsqueda), `POST /recursos` (crear), `GET /recursos/{id}/disponibilidad`, `GET /recursos/{id}/ficha-tecnica`, `PUT /recursos/{id}` y `PATCH /recursos/{id}/estado`.
 - **`frontend/src/features/catalogo/pages/BuscarRecursosPage.jsx`**:
-  - Carga el catálogo y el perfil del usuario. Si el usuario tiene rol `GESTOR_ALMACEN` o `ADMINISTRADOR_SISTEMA`, habilita el formulario **"Registrar nuevo recurso"** y el selector **"Cambiar estado operativo"**.
+  - Carga el catálogo y el perfil del usuario. Si el usuario tiene rol `GESTOR_ALMACEN` o `ADMINISTRADOR_SISTEMA`, habilita el formulario **"Registrar nuevo recurso"** y el selector **"Cambiar estado operativo"**, y oculta el bloque de solicitud de reserva por segregación de funciones. Para usuarios con rol solicitante (`!esGestion`), muestra el botón «Solicitar Reserva de este Recurso» que redirige a `/reservas?recursoId=...` (Spec 006).
+
