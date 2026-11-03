@@ -19,14 +19,20 @@ router = APIRouter(prefix="/recursos", tags=["Recursos"])
 
 
 @router.get("", response_model=list[RecursoDTO])
-def buscar_recursos(filtro: str = "", session: Session = Depends(get_session)):
+def buscar_recursos(
+    filtro: str = "",
+    session: Session = Depends(get_session, scope="function"),  # noqa: B008
+):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
     return service.buscar(filtro)
 
 
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
-def crear_recurso(dto: CrearRecursoDTO, session: Session = Depends(get_session)):
+def crear_recurso(
+    dto: CrearRecursoDTO,
+    session: Session = Depends(get_session, scope="function"),  # noqa: B008
+):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
     try:
@@ -47,7 +53,10 @@ def crear_recurso(dto: CrearRecursoDTO, session: Session = Depends(get_session))
 
 
 @router.get("/{id_recurso}/disponibilidad")
-def consultar_disponibilidad(id_recurso: UUID, session: Session = Depends(get_session)):
+def consultar_disponibilidad(
+    id_recurso: UUID,
+    session: Session = Depends(get_session, scope="function"),  # noqa: B008
+):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
     disponible = service.consultar_disponibilidad(id_recurso)
@@ -55,7 +64,10 @@ def consultar_disponibilidad(id_recurso: UUID, session: Session = Depends(get_se
 
 
 @router.get("/{id_recurso}/ficha-tecnica", response_model=RecursoDTO)
-def obtener_ficha_tecnica(id_recurso: UUID, session: Session = Depends(get_session)):
+def obtener_ficha_tecnica(
+    id_recurso: UUID,
+    session: Session = Depends(get_session, scope="function"),  # noqa: B008
+):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
     recurso_dto = service.obtener_ficha_tecnica(id_recurso)
@@ -68,7 +80,7 @@ def obtener_ficha_tecnica(id_recurso: UUID, session: Session = Depends(get_sessi
 def actualizar_recurso(
     id_recurso: UUID,
     dto: ActualizarRecursoDTO,
-    session: Session = Depends(get_session),  # noqa: B008
+    session: Session = Depends(get_session, scope="function"),  # noqa: B008
 ):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
@@ -98,7 +110,7 @@ def actualizar_recurso(
 def actualizar_estado(
     id_recurso: UUID,
     dto: ActualizarEstadoRecursoDTO,
-    session: Session = Depends(get_session),  # noqa: B008
+    session: Session = Depends(get_session, scope="function"),  # noqa: B008
 ):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)

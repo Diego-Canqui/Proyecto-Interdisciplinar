@@ -25,7 +25,9 @@ from prestamos_recursos.shared.database import get_session
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
-def get_autenticacion_service(session: Session = Depends(get_session)) -> AutenticacionService:  # noqa: B008
+def get_autenticacion_service(
+    session: Session = Depends(get_session, scope="function"),  # noqa: B008
+) -> AutenticacionService:
     """Factory para inyectar AutenticacionService con repositorio real."""
     return AutenticacionService(SqlUsuarioRepository(session))
 

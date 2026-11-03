@@ -27,10 +27,10 @@
 >    - `fecha_inicio: datetime` y `fecha_fin: datetime`: Ventana temporal reservada (con zona horaria UTC).
 >    - `estado: EstadoReserva`: Estado del ciclo de vida de la reserva.
 > 2. **`EstadoReserva` (Enum de dominio):**
->    - `PENDIENTE`: Solicitada en espera de validación de disponibilidad o elegibilidad.
->    - `CONFIRMADA`: Bloque temporal asegurado para el usuario.
+>    - `PENDIENTE`: En la **lista de espera**: otra reserva `CONFIRMADA` ocupa ese horario. Se ordena por reputación.
+>    - `CONFIRMADA`: Bloque temporal asegurado. Si el horario está libre, la reserva nace directamente confirmada.
 >    - `CANCELADA`: Anulada por el usuario o administrador antes de su inicio.
->    - `VENCIDA`: Caducada por inasistencia del usuario en el tiempo de tolerancia pactado.
+>    - `VENCIDA`: Existe en el enum, pero hoy ninguna tarea automática la asigna (limitación conocida).
 >    - `CONVERTIDA`: Exitosa, cuando el usuario se presenta en almacén y la reserva pasa a ser un préstamo físico activo.*"
 
 ---
@@ -39,18 +39,18 @@
 **Respuesta exacta:**
 > *"La entidad `Reserva` es una clase pura de Python. En la capa de infraestructura la mapeamos con SQLAlchemy a la base de datos PostgreSQL:*
 > - *El modelo es `ReservaModel`, configurado con `__table_args__ = {"schema": "reservas"}` y tabla física `reservas.reservas`.*
-> - *Persistimos a través de la implementación del repositorio `SQLAlchemyReservaRepository`.*
-> - *En estricto apego al patrón **Unit of Work por petición HTTP (Decisión D13)**, el repositorio **NUNCA ejecuta `session.commit()`**. Solo utiliza `session.flush()` para sincronizar los cambios con la transacción abierta. Si la petición HTTP completa su flujo con éxito en FastAPI, la dependencia `shared.get_session` realiza el commit atómico; si algo falla, se dispara el rollback automático."*
+> - *Persistimos a través de la implementación del repositorio `SqlReservaRepository`.*
+> - *En estricto apego al patrón **Unit of Work por petición HTTP (Decisión D13)**, el repositorio **NUNCA ejecuta `session.commit()`**. Solo utiliza `session.flush()` para sincronizar los cambios con la transacción abierta. Si la petición HTTP completa su flujo con éxito en FastAPI, la dependencia `shared.get_session` realiza el commit atómico; si algo falla, se dispara el rollback automático. Al inyectarla con `Depends(get_session, scope="function")`, el commit se confirma antes de enviar la respuesta, por lo que el frontend puede volver a listar y ver la reserva recién creada. Corregimos además que `SqlReservaRepository.guardar()` no hacía `flush()` como los demás repositorios."*
 
 ---
 
 ### Pregunta 3: ¿Cuáles son las reglas de negocio críticas que protege tu Aggregate Root?
 **Respuesta exacta:**
 > *"El Aggregate Root `Reserva` protege las siguientes reglas del negocio:*
-> 1. **Prevención de Solapamiento Temporal (Overbooking):** No pueden existir dos reservas activas (`CONFIRMADA`) para el mismo `recurso_id` cuya ventana temporal `[fecha_inicio, fecha_fin]` se intersecte. Esta verificación se realiza antes de persistir la confirmación.
-> 2. **Validez del Rango Temporal:** `fecha_inicio` debe ser siempre menor que `fecha_fin` y debe programarse a futuro (no se pueden reservar fechas pasadas).
-> 3. **Vigencia y Expiración Automática (`esta_vigente`):** Si el usuario no acude a reclamar su recurso dentro de una ventana de tolerancia tras `fecha_inicio` (ej. 15 minutos), el método de dominio marca la reserva como `VENCIDA`, liberando de inmediato el recurso para la comunidad.
-> 4. **Transición hacia Préstamo (`convertir_a_prestamo`):** Solo una reserva en estado `CONFIRMADA` y vigente puede ser convertida. Una reserva `CANCELADA` o `VENCIDA` rechaza la conversión."*
+> 1. **Prevención de Solapamiento Temporal (Overbooking):** No pueden existir dos reservas `CONFIRMADA` para el mismo `recurso_id` cuyas ventanas `[fecha_inicio, fecha_fin)` se intersecten (`se_superpone_con`; horarios consecutivos no chocan). Si el horario ya está ocupado, la nueva reserva queda `PENDIENTE` en la lista de espera; un mismo usuario no puede duplicar una reserva activa en el mismo horario (409).
+> 2. **Validez del Rango Temporal:** `fecha_fin` debe ser posterior a `fecha_inicio` (`__post_init__`) y la duración máxima es de **7 días** (`Reserva.crear`, Spec 006). El formulario del frontend impide elegir fechas pasadas.
+> 3. **Vigencia (`esta_vigente`):** Una reserva `PENDIENTE` o `CONFIRMADA` solo está vigente mientras `fecha_fin >= ahora`; la cola de espera y las promociones ignoran las reservas no vigentes. No hay una tolerancia de 15 minutos ni expiración automática.
+> 4. **Transición hacia Préstamo (`convertir_a_prestamo`):** Solo una reserva `CONFIRMADA` puede convertirse en préstamo (`convertir_a_prestamo`), y solo la gestión puede iniciarla. Una reserva `CANCELADA`, `VENCIDA` o `CONVERTIDA` la rechaza."*
 
 ---
 
@@ -59,9 +59,9 @@
 > *"Nos conectamos respetando el principio de aislamiento estricto de Bounded Contexts en DDD:*
 > - ***Referencias exclusivas por IDs primitivos:** Mi tabla `reservas.reservas` almacena `usuario_id: UUID` y `recurso_id: UUID`. No existen Foreign Keys en la base de datos hacia otros esquemas ni importaciones de modelos ORM de otros contextos.*
 > - ***Validación previa en la Capa de Aplicación:** Cuando un usuario intenta crear una reserva:
->   1. Mi servicio de aplicación consulta a **Identidad** (`ConsultarElegibilidadUsuarioService`) enviando el `usuario_id`. Si el usuario está sancionado o tiene bajo puntaje, se rechaza la reserva.
->   2. Consulta a **Catálogo** enviando el `recurso_id` para confirmar que exista y no esté en mantenimiento o fuera de servicio.
->   3. Si ambas validaciones pasan, se crea la reserva y se le solicita a Catálogo marcar el estado del recurso como `RESERVADO`.*
+>   1. El controlador rechaza con 403 a quien tenga rol de gestión y a quien intente reservar para otro usuario.
+>   2. Mi servicio de aplicación consulta a **Identidad** (`ReputacionService`, solo lectura) enviando el `usuario_id`: si tiene una sanción vigente no cubierta por excepción, rechaza con 409; además consulta su nivel para aplicar el cupo de operaciones simultáneas (BAJO 1, NORMAL 2, BUENO 3, EXCELENTE 5), sumando reservas activas y préstamos en curso.
+>   3. Si el horario está libre, la reserva nace `CONFIRMADA`; si está ocupado, `PENDIENTE`. **No** consulto el estado del recurso en Catálogo ni lo modifico: esa validación ocurre al iniciar el préstamo.*
 > - ***Consumo por parte de Préstamos:** Cuando el usuario llega a recoger el equipo, el módulo de Préstamos recibe el `reserva_id`, valida su estado `CONFIRMADA` y me solicita actualizarla a `CONVERTIDA`."*
 
 ---
@@ -87,9 +87,9 @@
 
 | Compañero / Módulo | ¿Qué me pide él a mí? (Entrada) | ¿Qué le pido yo a él? (Salida) |
 |---|---|---|
-| **Persona 1 (Identidad)** | Identidad no me pide reservas. | Le pido validar si el `usuario_id` que intenta reservar es **elegible para préstamo** (`es_elegible_para_prestamo`). Si tiene sanciones activas, no le permito reservar. |
-| **Persona 2 (Catálogo)** | Catálogo no me pide reservas. | 1. Le pido verificar que el `recurso_id` esté en estado `DISPONIBLE`.<br>2. Al confirmar la reserva, le pido cambiar el estado del recurso a `RESERVADO`.<br>3. Si la reserva vence o se cancela, le pido liberar el recurso a `DISPONIBLE`. |
-| **Persona 4 (Préstamos)** | Préstamos me envía el `reserva_id` al momento de la entrega física para verificar que esté `CONFIRMADA` y no vencida, y me pide transicionar su estado a `CONVERTIDA`. | Le entrego a Préstamos la reserva confirmada con sus datos (`usuario_id`, `recurso_id`, fechas) para que él inicie el préstamo físico. |
+| **Persona 1 (Identidad)** | Identidad no me pide reservas. | Le pido la **elegibilidad** (sin sanciones vigentes no cubiertas), el **nivel** (cupo de operaciones) y el **puntaje** (orden de la cola) de cada `usuario_id`, con las consultas de solo lectura de `ReputacionService`. |
+| **Persona 2 (Catálogo)** | Catálogo no me pide reservas. | **Nada.** No consulto ni cambio el estado del recurso; solo guardo su `recurso_id`. |
+| **Persona 4 (Préstamos)** | Reservas es quien invoca a Préstamos: al convertir una reserva `CONFIRMADA` (acción de gestión) llamo a `PrestamoService.solicitar_prestamo` y, si todo sale bien, marco la reserva `CONVERTIDA`. | Le entrego los datos primitivos de la reserva (`reserva_id`, `usuario_id`, `recurso_id`, fechas) para que cree el préstamo `ACTIVO`. |
 
 ---
 
@@ -98,4 +98,4 @@
 > [!TIP]
 > **Si la profesora te pregunta de sorpresa: «¿Qué resuelve el módulo de Reservas y cuál es su mayor valor técnico?»**
 >
-> *"Mi módulo resuelve la **planificación justa y eficiente de recursos compartidos**: previene matemáticamente el sobre-agendamiento (overbooking) en el tiempo, garantiza que solo usuarios con reputación intachable puedan apartar equipos y sincroniza de forma desacoplada la transición hacia el préstamo físico mediante identificadores primitivos."*
+> *"Mi módulo resuelve la **planificación justa y eficiente de recursos compartidos**: previene matemáticamente el sobre-agendamiento (overbooking) en el tiempo, ordena la lista de espera por reputación, limita las operaciones simultáneas según el nivel y bloquea a los usuarios sancionados y sincroniza de forma desacoplada la transición hacia el préstamo físico mediante identificadores primitivos."*
