@@ -67,9 +67,9 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
 
 ### Capa de Dominio (`contexts/reservas/domain/`)
 - **`entities/reserva.py` (`Reserva`)**:
-  - `Reserva.crear(...)`: Método de fábrica que valida `fecha_fin > fecha_inicio` e inicializa el estado en `PENDIENTE`.
+  - `Reserva.crear(...)`: Método de fábrica que valida la duración máxima de 7 días e inicializa el estado en `PENDIENTE`. `__post_init__` valida que `fecha_fin > fecha_inicio`.
   - `confirmar()`: Verifica que esté `PENDIENTE` y vigente (`esta_vigente()`), y cambia el estado a `CONFIRMADA`.
-  - `cancelar()`: Impide cancelar una reserva ya cancelada y pasa el estado a `CANCELADA`.
+  - `cancelar()`: Impide cancelar una reserva `CANCELADA`, `VENCIDA` o `CONVERTIDA` y pasa el estado a `CANCELADA`.
   - `se_superpone_con(otra: Reserva) -> bool`: Compara en UTC si dos intervalos `[fecha_inicio, fecha_fin)` se solapan.
 - **`services/algoritmo_prioridad_service.py` (`AlgoritmoPrioridadService`)**:
   - `ordenar_cola_espera(reservas, puntajes_reputacion=None)`: Ordena por `(-puntajes.get(r.usuario_id, 500), r.fecha_inicio)`.
@@ -86,3 +86,11 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
   - Endpoints `/reservas`, `/reservas/usuario/{id_usuario}`, `/reservas/recurso/{id_recurso}/cola`, `PATCH /reservas/{id}/confirmar`, `POST /reservas/{id}/prestamo` y `PATCH /reservas/{id}/cancelar`.
 - **`frontend/src/features/reservas/pages/MisReservasPage.jsx`**:
   - Formulario de solicitud (que lee `?recursoId=` si el usuario vino desde el catálogo), alerta informativa cuando una reserva queda en cola de espera por reputación, y tabla de acciones diferenciada por rol (`esGestion`).
+
+---
+
+## 4. Limitaciones conocidas
+
+- **`VENCIDA` sin asignación automática:** el estado existe en `EstadoReserva` y bloquea la cancelación, pero ninguna tarea lo asigna cuando el usuario no se presenta: una reserva `CONFIRMADA` solo cambia por confirmación, cancelación o conversión a préstamo. La sanción `INASISTENCIA_RESERVA` también se registra manualmente.
+- **Sin consulta previa al catálogo:** `crear_reserva` no verifica que el `recurso_id` exista ni que esté `DISPONIBLE`; esa validación se hace al iniciar el préstamo (`PrestamoService.solicitar_prestamo`). Tampoco cambia el estado del recurso a «reservado» (el catálogo solo tiene `DISPONIBLE`, `EN_USO`, `MANTENIMIENTO` y `FUERA_DE_SERVICIO`).
+- **Dependencias de código:** `ReservaService` importa `PrestamoService` y `NivelReputacion`; las referencias de datos siguen siendo solo por ID.
