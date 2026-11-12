@@ -6,6 +6,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from prestamos_recursos.contexts.catalogo.application.services import (
+    RecursoApplicationService,
+)
 from prestamos_recursos.contexts.catalogo.infrastructure.repositories import (
     SqlRecursoRepository,
 )
@@ -56,18 +59,24 @@ router = APIRouter(prefix="/reservas", tags=["Reservas"])
 def obtener_servicio(
     sesion: Annotated[Session, Depends(get_session, scope="function")],
 ) -> ReservaService:
+    catalogo = RecursoApplicationService(SqlRecursoRepository(sesion))
     prestamos = PrestamoService(
         SqlPrestamoRepository(sesion),
         SqlChecklistRepository(sesion),
         SqlGarantiaRepository(sesion),
-        recurso_repository=SqlRecursoRepository(sesion),
+        catalogo_service=catalogo,
     )
     reputacion = ReputacionService(
         SqlPerfilReputacionRepository(sesion),
         SqlExcepcionAcademicaRepository(sesion),
         SqlUsuarioRepository(sesion),
     )
-    return ReservaService(SqlReservaRepository(sesion), prestamos, reputacion)
+    return ReservaService(
+        SqlReservaRepository(sesion),
+        prestamos,
+        reputacion,
+        catalogo_service=catalogo,
+    )
 
 
 ServicioReservas = Annotated[ReservaService, Depends(obtener_servicio)]

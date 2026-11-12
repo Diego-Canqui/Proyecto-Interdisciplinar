@@ -65,24 +65,33 @@ Cada integrante cuenta con su propio documento detallado en esta carpeta:
 
 ## 5. Resumen del Flujo Completo entre los 4 Contextos
 
-1. **Catálogo (`catalogo`):** El gestor registra el recurso con su ficha técnica y queda en estado `DISPONIBLE`.
-2. **Reserva (`reservas`):** El usuario solicita reservar el recurso en un rango de fechas. Debe tener rol solicitante (`403` si tiene rol de gestión), no tener sanción bloqueante activa (`409`), no superar su cupo de operaciones activas simultáneas según su `NivelReputacion` (`BAJO`: 1, `NORMAL`: 2, `BUENO`: 3, `EXCELENTE`: 5) sumando reservas activas y préstamos en curso, y la duración máxima de toda reserva es de **7 días** (`409` si se supera). Si el horario está libre, pasa directo a `CONFIRMADA`. Si está ocupado por otra reserva confirmada, entra en `PENDIENTE` (lista de espera ordenada de mayor a menor reputación consultando a `identidad_reputacion`). Al cancelar una reserva confirmada, la cola promueve al mejor candidato saltando a quienes tengan sanciones activas.
-3. **Inicio de Préstamo (`reservas` → `prestamos` → `catalogo`):** Cuando el usuario se presenta, el gestor inicia el préstamo desde la reserva confirmada (verificando que el titular no tenga sanción bloqueante activa sobrevenida). El préstamo nace en estado `ACTIVO` y el recurso pasa a `EN_USO`.
+1. **Catálogo (`catalogo`):** El gestor registra el recurso con su ficha técnica y queda en estado `DISPONIBLE`. Puede pasar a `EN_USO` al prestarse, a `MANTENIMIENTO` si se detectan daños o a `FUERA_DE_SERVICIO` si es dado de baja.
+2. **Reserva (`reservas`):** El usuario solicita reservar un recurso.
+   - **Políticas operativas (Spec 007):**
+     - El recurso debe encontrarse en estado `DISPONIBLE` o `EN_USO` (se rechaza con `409 Conflict` si está en `MANTENIMIENTO` o `FUERA_DE_SERVICIO`, estado verificado vía `RecursoApplicationService`).
+     - Horario de atención institucional: entregas y devoluciones únicamente de lunes a viernes entre las **08:00 y las 20:00 UTC** inclusive (`Reserva.crear`).
+     - Duración: mínimo **1 hora** y máximo **7 días**.
+     - Anticipación: no se permiten reservas en el pasado (con tolerancia de 5 minutos para desfases de reloj) y máximo **30 días** de anticipación respecto a la fecha de inicio.
+     - Cupo y elegibilidad: rol solicitante (`403` para roles de gestión), sin sanciones bloqueantes activas (`409`) y respetando el cupo máximo de operaciones simultáneas según su `NivelReputacion` (`BAJO`: 1, `NORMAL`: 2, `BUENO`: 3, `EXCELENTE`: 5) sumando reservas activas y préstamos en curso.
+   - Si el horario está libre, la reserva pasa directo a `CONFIRMADA`. Si se cruza con otra confirmada, queda en `PENDIENTE` (lista de espera ordenada de mayor a menor reputación). Al cancelarse una reserva confirmada, se promueve automáticamente al mejor candidato elegible sin sanciones.
+3. **Inicio de Préstamo (`reservas` → `prestamos` → `catalogo`):**
+   - El préstamo solo puede iniciarse dentro de la ventana operativa de conversión: **`fecha_inicio - 1 hora <= ahora <= fecha_fin`** (`409 Conflict` fuera de ventana).
+   - El gestor inicia el préstamo desde la reserva confirmada (verificando que el titular no tenga sanción bloqueante activa sobrevenida). El préstamo nace en estado `ACTIVO` y el recurso pasa a `EN_USO` en catálogo.
 4. **Entrega Física y Cancelación en Ventanilla (`prestamos` → `catalogo` + `identidad_reputacion`):** Mientras el préstamo está en estado `ACTIVO` (antes de la entrega física), el gestor puede:
-   - **Completar la entrega:** Registra la `Garantia` (carné, DNI o depósito) y el `Checklist` de salida con fotos. El préstamo pasa a `ENTREGADO`. Si el usuario recogió en la fecha pactada, recibe +10 puntos de reputación.
+   - **Completar la entrega:** Registra la `Garantia` (carné, DNI o depósito, en estado `REGISTRADA`) y el `Checklist` de salida (`ESTADO_INICIAL`). El préstamo pasa a `ENTREGADO`. Si el usuario recogió en o antes de la fecha pactada, recibe **+10 puntos** de reputación (`premiar_entrega_puntual`).
    - **Cancelar el préstamo en ventanilla (`POST /prestamos/{id}/cancelar`, Spec 006):** Si el solicitante no se presenta o desiste antes de la entrega física, el gestor cancela el préstamo. El préstamo pasa a `CANCELADO` y el recurso vuelve inmediatamente a `DISPONIBLE` en el catálogo sin penalizar la reputación del usuario.
-5. **Devolución (`prestamos` → `catalogo` + `identidad_reputacion`):** Solo se habilita en ventanilla para préstamos en estado `ENTREGADO` o `VENCIDO`. Al devolver el bien, el gestor registra el `Checklist` de retorno.
-   - Si fue puntual y sin daños: el préstamo pasa a `DEVUELTO`, el recurso vuelve a `DISPONIBLE` y el usuario gana +10 puntos de reputación.
-   - Si hubo retraso (por días calendario en UTC): se aplica sanción `TARDANZA` (−10 pts). Con 1 día de retraso solo descuenta puntos (gracia de 1 día); desde 2 días de retraso bloquea 1 día por cada día de retraso.
-   - Si hubo daños físicos: se aplica sanción `DANO_PARCIAL` (−30 pts, deuda de $50, 30 días de bloqueo) y el recurso pasa automáticamente a `MANTENIMIENTO`. `DANO_TOTAL` (−100 pts, 60 días) la registra gestión manualmente.
-   - Si no asistió a recoger una reserva confirmada: sanción `INASISTENCIA_RESERVA` (−15 pts, 3 días), registrada manualmente por gestión (`POST /reputacion/sanciones`).
+5. **Devolución (`prestamos` → `catalogo` + `identidad_reputacion`):** Solo se habilita en ventanilla para préstamos en estado `ENTREGADO` o `VENCIDO`. Al devolver el bien, el gestor registra el `Checklist` de retorno (`ESTADO_DEVOLUCION`).
+   - **Ciclo de vida de la Garantía (Spec 007):** Si `danos_detectados == False`, la garantía asociada pasa automáticamente a `LIBERADA` (registrando `fecha_liberacion`, visible en inspecciones); si `danos_detectados == True`, la garantía pasa a `RETENIDA`.
+   - **Puntual y sin daños:** El préstamo pasa a `DEVUELTO`, el recurso vuelve a `DISPONIBLE` y el usuario gana **+10 puntos** de reputación (`premiar_devolucion_puntual`).
+   - **Retraso en la entrega (por días calendario en UTC):** Se aplica sanción `TARDANZA` (−10 pts, deuda $0). Con 1 día de retraso solo descuenta puntos (gracia de 1 día); desde 2 días de retraso bloquea 1 día por cada día de retraso.
+   - **Daños físicos:** Se aplica sanción `DANO_PARCIAL` (−30 pts, deuda $50, bloqueo de 30 días) y el recurso pasa automáticamente a `MANTENIMIENTO`. `DANO_TOTAL` (−100 pts, deuda = valor del recurso, bloqueo de 60 días) la registra gestión manualmente.
+   - **Inasistencia a reserva:** Sanción `INASISTENCIA_RESERVA` (−15 pts, deuda $0, bloqueo fijo de 3 días), registrada manualmente por gestión (`POST /reputacion/sanciones`).
 
 ---
 
 ## 6. Limitaciones Conocidas y Trabajo Futuro
 
 1. **Checklist de inspección fijo (pendiente para `catalogo` + `prestamos`):** El formulario de entrega de `/historial` muestra siempre las mismas 4 casillas (carcasa, pantalla, cables/cargador y nº de serie), sin importar el tipo de recurso. Lo correcto es que `catalogo` exponga los criterios de inspección según la categoría del recurso y que `prestamos` los muestre y los guarde de forma estructurada (hoy se guardan concatenados en `observaciones`). Para demostrar el flujo actual se usa un recurso de tipo cómputo (la *Laptop Dell Latitude 5420* del seed).
-2. **Dependencias entre contextos por código:** Aunque las referencias de datos son solo por ID y los servicios se inyectan, `prestamos` importa `RecursoRepository`/`EstadoRecurso` de `catalogo` y `TipoSancion` de `identidad_reputacion`, y `reservas` importa `PrestamoService` y `NivelReputacion`. Es un desvío de la regla de aislamiento total que debe saberse al defender la arquitectura.
-3. **Sanciones automáticas parciales:** Solo `TARDANZA` y `DANO_PARCIAL` se aplican automáticamente al devolver; `INASISTENCIA_RESERVA` y `DANO_TOTAL` son manuales. Las reservas `CONFIRMADA` no expiran por sí solas (`VENCIDA` existe en el enum pero no hay tarea que la asigne).
-4. **Cálculo de retraso en UTC:** `calcular_dias_retraso` compara fechas en UTC, no en hora local; una devolución cerca de la medianoche local puede contar un día de más.
+2. **Sanciones automáticas parciales:** Solo `TARDANZA` y `DANO_PARCIAL` se aplican automáticamente al devolver; `INASISTENCIA_RESERVA` y `DANO_TOTAL` son manuales. Las reservas `CONFIRMADA` no expiran por sí solas (`VENCIDA` existe en el enum pero no hay tarea que la asigne).
+3. **Cálculo de retraso en UTC:** `calcular_dias_retraso` compara fechas en UTC, no en hora local; una devolución cerca de la medianoche local puede contar un día de más.
 

@@ -886,7 +886,7 @@ export default function GestionReputacionPage() {
                         required
                       >
                         <option value="TARDANZA">TARDANZA</option>
-                        <option value="PERDIDA">PERDIDA</option>
+                        <option value="INASISTENCIA_RESERVA">INASISTENCIA_RESERVA</option>
                         <option value="DANO_PARCIAL">DANO_PARCIAL</option>
                         <option value="DANO_TOTAL">DANO_TOTAL</option>
                       </select>

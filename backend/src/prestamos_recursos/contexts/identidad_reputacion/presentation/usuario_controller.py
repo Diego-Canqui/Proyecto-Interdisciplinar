@@ -31,6 +31,9 @@ router = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 def get_usuario_service(
     session: Session = Depends(get_session, scope="function"),  # noqa: B008
 ) -> UsuarioService:
+    from prestamos_recursos.contexts.catalogo.application.services import (
+        RecursoApplicationService,
+    )
     from prestamos_recursos.contexts.catalogo.infrastructure.repositories import (
         SqlRecursoRepository,
     )
@@ -75,12 +78,13 @@ def get_usuario_service(
         excepcion_academica_repository=excepcion_repo,
         usuario_repository=usuario_repo,
     )
+    catalogo_service = RecursoApplicationService(recurso_repo)
     prestamo_service = PrestamoService(
         prestamo_repository=prestamo_repo,
         checklist_repository=checklist_repo,
         garantia_repository=garantia_repo,
         reputacion_service=reputacion_service,
-        recurso_repository=recurso_repo,
+        catalogo_service=catalogo_service,
     )
     reserva_repo = SqlReservaRepository(session)
     reserva_service = ReservaService(

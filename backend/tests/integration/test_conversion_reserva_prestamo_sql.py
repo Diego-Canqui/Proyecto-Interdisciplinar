@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine
@@ -51,8 +51,8 @@ def test_conversion_persiste_prestamo_y_reserva_en_una_transaccion():
     reserva_id = uuid4()
     usuario_id = uuid4()
     recurso_id = uuid4()
-    fecha_inicio = datetime(2026, 10, 6, tzinfo=UTC)
-    fecha_fin = datetime(2026, 10, 7, tzinfo=UTC)
+    fecha_inicio = datetime.now(UTC) + timedelta(minutes=30)
+    fecha_fin = fecha_inicio + timedelta(hours=2)
     session.add(
         ReservaModel(
             id=reserva_id,

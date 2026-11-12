@@ -12,11 +12,15 @@ from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies 
     get_current_user,
 )
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
+from prestamos_recursos.contexts.prestamos.domain.entities.garantia import Garantia
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_garantia import EstadoGarantia
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
 from prestamos_recursos.contexts.prestamos.domain.enums.tipo_checklist import TipoChecklist
 from prestamos_recursos.contexts.prestamos.domain.enums.tipo_garantia import TipoGarantia
+from prestamos_recursos.contexts.prestamos.domain.value_objects.compromiso_responsabilidad import (
+    CompromisoResponsabilidad,
+)
 from prestamos_recursos.contexts.prestamos.presentation.dependencies import get_prestamo_service
 from prestamos_recursos.main import app
 
@@ -205,6 +209,14 @@ def test_ciclo_entrega_endpoints_completo():
     }
     assert prestamo.estado == EstadoPrestamo.DEVUELTO
     assert recurso_repository.estado == EstadoRecurso.DISPONIBLE
+
+    # RF-05: verificar que la garantía quedó LIBERADA con fecha_liberacion
+    res_insp_post = client.get(f"/prestamos/{prestamo.id}/inspeccion")
+    assert res_insp_post.status_code == 200
+    insp_post_data = res_insp_post.json()
+    assert insp_post_data["garantia"]["estado"] == "LIBERADA"
+    assert insp_post_data["garantia"]["fecha_liberacion"] is not None
+
     segunda_devolucion = client.post(f"/prestamos/{prestamo.id}/devolucion")
     assert segunda_devolucion.status_code == 409
     assert segunda_devolucion.json()["detail"] == "El préstamo ya fue devuelto"
@@ -521,6 +533,67 @@ def test_cancelar_prestamo_sin_rol_de_gestion_retorna_403():
 def test_cancelar_prestamo_sin_token_retorna_401():
     response = client.post(f"/prestamos/{uuid4()}/cancelar")
     assert response.status_code == 401
+
+
+@pytest.mark.e2e
+def test_devolucion_con_danos_retiene_garantia_e2e():
+    """RF-05: la devolución con daños físicos retiene la garantía asociada."""
+    ahora = datetime.now(UTC)
+    recurso_id = uuid4()
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_id,
+        usuario_id=uuid4(),
+        fecha_inicio=ahora - timedelta(days=2),
+        fecha_fin=ahora + timedelta(days=2),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    fecha_reg = ahora - timedelta(days=2)
+    garantia = Garantia(
+        prestamo_id=prestamo.id,
+        tipo=TipoGarantia.CARNET_UNIVERSITARIO,
+        estado=EstadoGarantia.REGISTRADA,
+        fecha_registro=fecha_reg,
+        compromiso=CompromisoResponsabilidad(
+            contenido="Compromiso",
+            fecha_firma=fecha_reg,
+            firma_url="https://example.com/firma.png",
+            testigo="Operador",
+        ),
+    )
+    prestamo_repository = FakePrestamoRepository([prestamo])
+    recurso_repository = FakeRecursoRepository()
+    checklist_repository = FakeChecklistRepository()
+    garantia_repository = FakeGarantiaRepository()
+    garantia_repository.guardar(garantia)
+
+    service = PrestamoService(
+        prestamo_repository=prestamo_repository,
+        checklist_repository=checklist_repository,
+        garantia_repository=garantia_repository,
+        recurso_repository=recurso_repository,
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+
+    devolucion = client.post(
+        f"/prestamos/{prestamo.id}/devolucion",
+        json={
+            "observaciones": "Pantalla rota",
+            "danos_detectados": True,
+            "fotos_urls": ["https://example.com/dano.png"],
+        },
+    )
+    assert devolucion.status_code == 200
+
+    insp = client.get(f"/prestamos/{prestamo.id}/inspeccion")
+    assert insp.status_code == 200
+    data = insp.json()
+    assert data["garantia"]["estado"] == "RETENIDA"
+    assert data["garantia"]["fecha_liberacion"] is None
+
 
 
 

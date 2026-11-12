@@ -431,17 +431,24 @@ export default function BuscarRecursosPage() {
                   {/* Acción para usuarios solicitantes: Reservar */}
                   {!esGestion && (
                     <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--borde)" }}>
-                      {recursoSeleccionado.estado === "DISPONIBLE" ? (
-                        <Link
-                          to={`/reservas?recursoId=${recursoSeleccionado.id}`}
-                          className="boton boton--primario boton--bloque"
-                          style={{ textAlign: "center", textDecoration: "none" }}
-                        >
-                          🗓️ Solicitar Reserva de este Recurso
-                        </Link>
+                      {recursoSeleccionado.estado === "DISPONIBLE" || recursoSeleccionado.estado === "EN_USO" ? (
+                        <>
+                          <Link
+                            to={`/reservas?recursoId=${recursoSeleccionado.id}`}
+                            className="boton boton--primario boton--bloque"
+                            style={{ textAlign: "center", textDecoration: "none" }}
+                          >
+                            🗓️ Solicitar Reserva de este Recurso
+                          </Link>
+                          {recursoSeleccionado.estado === "EN_USO" && (
+                            <p style={{ fontSize: "0.85rem", color: "var(--texto-secundario)", marginTop: "0.5rem", marginBottom: 0, textAlign: "center" }}>
+                              ℹ️ Este recurso está actualmente en uso, pero se puede reservar para una fecha futura o entrar en lista de espera.
+                            </p>
+                          )}
+                        </>
                       ) : (
                         <div className="alerta alerta--aviso" style={{ fontSize: "0.875rem", margin: 0 }}>
-                          Este equipo no se encuentra disponible para préstamo inmediato (Estado: {recursoSeleccionado.estado}).
+                          Este recurso no admite reservas por encontrarse en mantenimiento o fuera de servicio (Estado: {recursoSeleccionado.estado}).
                         </div>
                       )}
                     </div>

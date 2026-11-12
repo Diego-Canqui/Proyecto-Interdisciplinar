@@ -229,6 +229,38 @@ class TestExcepcionAcademica:
         # La excepción no cubre DANO_PARCIAL, así que no debe ser elegible
         assert perfil.es_elegible_para_prestamo([excepcion]) is False
 
+    def test_rechaza_fecha_fin_anterior_a_fecha_inicio(self):
+        """RF-06: la entidad ExcepcionAcademica debe rechazar fecha_fin < fecha_inicio con ValueError."""
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import (
+            ExcepcionAcademica,
+        )
+
+        ahora = datetime.now(UTC)
+
+        with pytest.raises(
+            ValueError,
+            match="La fecha de fin de la excepción académica no puede ser anterior a la fecha de inicio",
+        ):
+            ExcepcionAcademica(
+                id=uuid4(),
+                usuario_id=uuid4(),
+                motivo="Fechas invertidas",
+                fecha_inicio=ahora,
+                fecha_fin=ahora - timedelta(days=1),
+                activa=True,
+            )
+
+        # fecha_fin == fecha_inicio sigue siendo válido (p. ej. evento de un día o instante)
+        excepcion_mismo_instante = ExcepcionAcademica(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            motivo="Mismo instante",
+            fecha_inicio=ahora,
+            fecha_fin=ahora,
+            activa=True,
+        )
+        assert excepcion_mismo_instante.fecha_fin == ahora
+
 
 # Importar para el último test
 from decimal import Decimal

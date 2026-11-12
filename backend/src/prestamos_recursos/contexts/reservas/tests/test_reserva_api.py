@@ -5,6 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
+from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
+from prestamos_recursos.contexts.catalogo.infrastructure.models.recurso_model import RecursoModel
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
     UsuarioDTO,
 )
@@ -101,12 +103,17 @@ def cliente():
 
 
 def datos_reserva(horas=2, recurso_id=None):
-    inicio = datetime.now(UTC) + timedelta(hours=horas)
+    candidato = (datetime.now(UTC) + timedelta(days=1)).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    )
+    while candidato.weekday() >= 5:
+        candidato += timedelta(days=1)
+    inicio = candidato
     return {
         "usuario_id": str(ID_USUARIO_PRUEBA),
         "recurso_id": recurso_id or str(uuid4()),
         "fecha_inicio": inicio.isoformat(),
-        "fecha_fin": (inicio + timedelta(hours=1)).isoformat(),
+        "fecha_fin": (inicio + timedelta(hours=horas)).isoformat(),
     }
 
 
@@ -498,7 +505,12 @@ def test_rechazo_403_gestor_o_admin_solicitar_reserva(cliente):
 
 
 def test_rechazo_duracion_mayor_a_7_dias_y_exito_exacto_7_dias(cliente):
-    inicio = datetime.now(UTC) + timedelta(hours=2)
+    candidato = (datetime.now(UTC) + timedelta(days=1)).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    )
+    while candidato.weekday() >= 5:
+        candidato += timedelta(days=1)
+    inicio = candidato
     # 8 días: supera límite 7 días -> 409
     datos_8_dias = {
         "usuario_id": str(ID_USUARIO_PRUEBA),
@@ -571,11 +583,16 @@ def test_rechazo_por_sancion_vigente_en_solicitud_confirmacion_y_prestamo(client
 
     # 1. Solicitar reserva con usuario sancionado -> 409
     app.dependency_overrides[get_current_user] = lambda: u_sancionado_dto
+    candidato = (ahora + timedelta(days=1)).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    )
+    while candidato.weekday() >= 5:
+        candidato += timedelta(days=1)
     datos = {
         "usuario_id": str(u_sancionado_id),
         "recurso_id": str(uuid4()),
-        "fecha_inicio": (ahora + timedelta(hours=2)).isoformat(),
-        "fecha_fin": (ahora + timedelta(hours=4)).isoformat(),
+        "fecha_inicio": candidato.isoformat(),
+        "fecha_fin": (candidato + timedelta(hours=2)).isoformat(),
     }
     resp_crear = cliente.post("/reservas", json=datos)
     assert resp_crear.status_code == 409
@@ -589,8 +606,8 @@ def test_rechazo_por_sancion_vigente_en_solicitud_confirmacion_y_prestamo(client
                 id=reserva_pendiente_id,
                 usuario_id=u_sancionado_id,
                 recurso_id=uuid4(),
-                fecha_inicio=ahora + timedelta(hours=5),
-                fecha_fin=ahora + timedelta(hours=7),
+                fecha_inicio=candidato + timedelta(days=1),
+                fecha_fin=candidato + timedelta(days=1, hours=2),
                 estado=EstadoReserva.PENDIENTE,
             )
         )
@@ -609,8 +626,8 @@ def test_rechazo_por_sancion_vigente_en_solicitud_confirmacion_y_prestamo(client
                 id=reserva_confirmada_id,
                 usuario_id=u_sancionado_id,
                 recurso_id=uuid4(),
-                fecha_inicio=ahora + timedelta(hours=10),
-                fecha_fin=ahora + timedelta(hours=12),
+                fecha_inicio=ahora + timedelta(minutes=30),
+                fecha_fin=ahora + timedelta(hours=2),
                 estado=EstadoReserva.CONFIRMADA,
             )
         )
@@ -657,12 +674,17 @@ def test_rechazo_limite_operaciones_simultaneas_segun_nivel(cliente):
     app.dependency_overrides[get_current_user] = lambda: u_bajo_dto
 
     ahora = datetime.now(UTC)
+    candidato = (ahora + timedelta(days=1)).replace(
+        hour=10, minute=0, second=0, microsecond=0
+    )
+    while candidato.weekday() >= 5:
+        candidato += timedelta(days=1)
     # Primera reserva -> 201
     datos1 = {
         "usuario_id": str(u_bajo_id),
         "recurso_id": str(uuid4()),
-        "fecha_inicio": (ahora + timedelta(hours=2)).isoformat(),
-        "fecha_fin": (ahora + timedelta(hours=3)).isoformat(),
+        "fecha_inicio": candidato.isoformat(),
+        "fecha_fin": (candidato + timedelta(hours=2)).isoformat(),
     }
     resp1 = cliente.post("/reservas", json=datos1)
     assert resp1.status_code == 201
@@ -671,11 +693,91 @@ def test_rechazo_limite_operaciones_simultaneas_segun_nivel(cliente):
     datos2 = {
         "usuario_id": str(u_bajo_id),
         "recurso_id": str(uuid4()),
-        "fecha_inicio": (ahora + timedelta(hours=5)).isoformat(),
-        "fecha_fin": (ahora + timedelta(hours=6)).isoformat(),
+        "fecha_inicio": (candidato + timedelta(hours=3)).isoformat(),
+        "fecha_fin": (candidato + timedelta(hours=5)).isoformat(),
     }
     resp2 = cliente.post("/reservas", json=datos2)
     assert resp2.status_code == 409
     assert "límite de 1 operaciones activas simultáneas" in resp2.json()["detail"]
+
+
+def test_convertir_a_prestamo_fuera_de_ventana_retorna_409(cliente):
+    """RF-04: intentar convertir a préstamo fuera de ventana (inicio - 1h <= ahora <= fin) retorna 409."""
+    reserva_id = uuid4()
+    ahora = datetime.now(UTC)
+    with SessionLocal() as session:
+        session.add(
+            ReservaModel(
+                id=reserva_id,
+                usuario_id=ID_USUARIO_PRUEBA,
+                recurso_id=uuid4(),
+                fecha_inicio=ahora + timedelta(days=3),
+                fecha_fin=ahora + timedelta(days=3, hours=2),
+                estado=EstadoReserva.CONFIRMADA,
+            )
+        )
+        session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: USUARIO_GESTOR
+    resp = cliente.post(f"/reservas/{reserva_id}/prestamo")
+    assert resp.status_code == 409
+    assert "el préstamo solo puede iniciarse desde 1 hora antes del horario reservado" in resp.json()["detail"]
+
+
+def test_solicitar_reserva_recurso_en_mantenimiento_o_fuera_de_servicio_retorna_409(cliente):
+    """RF-03: un recurso en mantenimiento o fuera de servicio no admite reservas (409)."""
+    rec_mant_id = uuid4()
+    rec_fuera_id = uuid4()
+
+    with SessionLocal() as session:
+        session.add(
+            RecursoModel(
+                id=rec_mant_id,
+                nombre="Cámara Mant",
+                descripcion="En taller",
+                categoria="Fotografía",
+                estado=EstadoRecurso.MANTENIMIENTO,
+                marca="Sony",
+                modelo="Alpha",
+                numero_serie=f"SN-{rec_mant_id}",
+                color="Negro",
+                estado_fisico="Regular",
+                foto_url="https://example.com/cam.png",
+            )
+        )
+        session.add(
+            RecursoModel(
+                id=rec_fuera_id,
+                nombre="Lente Roto",
+                descripcion="Averiado",
+                categoria="Fotografía",
+                estado=EstadoRecurso.FUERA_DE_SERVICIO,
+                marca="Canon",
+                modelo="50mm",
+                numero_serie=f"SN-{rec_fuera_id}",
+                color="Negro",
+                estado_fisico="Malo",
+                foto_url="https://example.com/lente.png",
+            )
+        )
+        session.commit()
+
+    # Mantenimiento -> 409
+    datos_mant = datos_reserva(recurso_id=str(rec_mant_id))
+    resp_mant = cliente.post("/reservas", json=datos_mant)
+    assert resp_mant.status_code == 409
+    assert (
+        resp_mant.json()["detail"]
+        == "el recurso no admite reservas por encontrarse en mantenimiento o fuera de servicio"
+    )
+
+    # Fuera de servicio -> 409
+    datos_fuera = datos_reserva(recurso_id=str(rec_fuera_id))
+    resp_fuera = cliente.post("/reservas", json=datos_fuera)
+    assert resp_fuera.status_code == 409
+    assert (
+        resp_fuera.json()["detail"]
+        == "el recurso no admite reservas por encontrarse en mantenimiento o fuera de servicio"
+    )
 
 

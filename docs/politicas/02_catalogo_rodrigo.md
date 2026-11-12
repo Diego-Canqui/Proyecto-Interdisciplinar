@@ -43,12 +43,18 @@ Todo recurso se encuentra siempre en uno de estos 4 estados:
 - **`MANTENIMIENTO`**: El recurso no puede prestarse porque está en revisión técnica (por ejemplo, cuando en la devolución de un préstamo se reportan daños físicos).
 - **`FUERA_DE_SERVICIO`**: El recurso fue dado de baja o presenta daño irreparable.
 
-### Política 3: Regla de Disponibilidad y Conexión con Préstamos
-- Un recurso solo se puede reservar y prestar cuando su estado es exactamente `EstadoRecurso.DISPONIBLE`. `PrestamoService.solicitar_prestamo` lo verifica y el endpoint `GET /recursos/{id}/disponibilidad` devuelve `disponible = (estado == DISPONIBLE)`.
+### Política 3: Regla de Disponibilidad y Conexión con Préstamos y Reservas (Spec 007)
+- Un recurso solo reporta `disponible = True` en `GET /recursos/{id}/disponibilidad` cuando su estado es exactamente `EstadoRecurso.DISPONIBLE` (`estado == DISPONIBLE`). `PrestamoService.solicitar_prestamo` también exige `DISPONIBLE` al iniciar el préstamo.
+- **Validación del estado operativo al reservar (Spec 007):**
+  - Al solicitar una reserva, `ReservaService` consulta a `RecursoApplicationService`. Se admiten solicitudes de reserva si el recurso está en **`DISPONIBLE`** o **`EN_USO`** (en este último caso para fechas futuras o cola de espera).
+  - Si el recurso está en **`MANTENIMIENTO`** o **`FUERA_DE_SERVICIO`**, el sistema rechaza la reserva con `409 Conflict` (`"el recurso no admite reservas por encontrarse en mantenimiento o fuera de servicio"`).
+- **Ventana de inicio de préstamo:** La conversión de reserva confirmada en préstamo se realiza dentro de la ventana `fecha_inicio - 1 hora <= ahora <= fecha_fin` (`409 Conflict` fuera de ventana).
 - **Transiciones automáticas desde el contexto `prestamos`:**
-  - Cuando un gestor convierte una reserva en préstamo (`PrestamoService.solicitar_prestamo`), verifica que el recurso esté `DISPONIBLE` y lo pasa automáticamente a **`EN_USO`**.
-  - Cuando se procesa la devolución (`PrestamoService.procesar_devolucion`), si no se detectaron daños vuelve a **`DISPONIBLE`**; si se detectaron daños físicos (`danos_detectados = True`), pasa automáticamente a **`MANTENIMIENTO`**.
-  - Cuando un préstamo en estado `ACTIVO` (aún no entregado físicamente) es cancelado en ventanilla (`PrestamoService.cancelar_prestamo`), el recurso vuelve automáticamente de `EN_USO` a **`DISPONIBLE`** sin alterar la reputación (Spec 006).
+  - Cuando un gestor convierte una reserva en préstamo (`PrestamoService.solicitar_prestamo`), verifica que el recurso esté en catálogo y lo pasa a **`EN_USO`**.
+  - Cuando se procesa la devolución (`PrestamoService.procesar_devolucion`):
+    - Si no se detectaron daños (`danos_detectados == False`): el recurso vuelve a **`DISPONIBLE`** y la garantía asociada se libera automáticamente (`LIBERADA` con `fecha_liberacion`).
+    - Si se detectaron daños físicos (`danos_detectados == True`): el recurso pasa automáticamente a **`MANTENIMIENTO`** y la garantía queda retenida (`RETENIDA`).
+  - Cuando un préstamo en estado `ACTIVO` (aún no entregado físicamente) es cancelado en ventanilla (`PrestamoService.cancelar_prestamo`), el recurso vuelve automáticamente de `EN_USO` a **`DISPONIBLE`** sin penalizar la reputación (Spec 006).
 
 ---
 
@@ -83,5 +89,5 @@ Todo recurso se encuentra siempre en uno de estos 4 estados:
 - **`presentation/recurso_controller.py`**:
   - `GET /recursos` (búsqueda), `POST /recursos` (crear), `GET /recursos/{id}/disponibilidad`, `GET /recursos/{id}/ficha-tecnica`, `PUT /recursos/{id}` y `PATCH /recursos/{id}/estado`.
 - **`frontend/src/features/catalogo/pages/BuscarRecursosPage.jsx`**:
-  - Carga el catálogo y el perfil del usuario. Si el usuario tiene rol `GESTOR_ALMACEN` o `ADMINISTRADOR_SISTEMA`, habilita el formulario **"Registrar nuevo recurso"** y el selector **"Cambiar estado operativo"**, y oculta el bloque de solicitud de reserva por segregación de funciones. Para usuarios con rol solicitante (`!esGestion`), muestra el botón «Solicitar Reserva de este Recurso» que redirige a `/reservas?recursoId=...` (Spec 006).
+  - Carga el catálogo y el perfil del usuario. Si el usuario tiene rol `GESTOR_ALMACEN` o `ADMINISTRADOR_SISTEMA`, habilita el formulario **"Registrar nuevo recurso"** y el selector **"Cambiar estado operativo"**, y oculta el bloque de solicitud de reserva por segregación de funciones. Para usuarios con rol solicitante (`!esGestion`), muestra el botón «Solicitar Reserva de este Recurso» que redirige a `/reservas?recursoId=...` cuando el recurso está en `DISPONIBLE` o `EN_USO` (indicando una nota si está en uso sobre fechas futuras / lista de espera), y muestra alerta de aviso si está en `MANTENIMIENTO` o `FUERA_DE_SERVICIO` (Spec 007).
 

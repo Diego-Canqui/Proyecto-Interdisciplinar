@@ -17,6 +17,21 @@ class ExcepcionAcademica(BaseEntity):
     fecha_fin: datetime
     activa: bool = True
 
+    def __post_init__(self) -> None:
+        """Valida que la fecha de fin no sea anterior a la de inicio (RF-06)."""
+        inicio = self.fecha_inicio
+        fin = self.fecha_fin
+
+        if inicio.tzinfo is None:
+            inicio = inicio.replace(tzinfo=UTC)
+        if fin.tzinfo is None:
+            fin = fin.replace(tzinfo=UTC)
+
+        if fin < inicio:
+            raise ValueError(
+                "La fecha de fin de la excepción académica no puede ser anterior a la fecha de inicio"
+            )
+
     def anular(self) -> None:
         """Marca la excepción como anulada (activa=False), p. ej. si se registró por error (RF-22)."""
         self.activa = False

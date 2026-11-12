@@ -203,6 +203,39 @@ class TestAplicarSancionDTO:
 
 
 @pytest.mark.unit
+class TestRegistrarExcepcionDTO:
+    """Tests para RegistrarExcepcionDTO."""
+
+    def test_registrar_excepcion_dto_rechaza_fecha_fin_menor_a_inicio(self):
+        """RF-06: RegistrarExcepcionDTO debe lanzar ValidationError si fecha_fin < fecha_inicio."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            RegistrarExcepcionDTO,
+        )
+
+        ahora = datetime.now(UTC)
+        with pytest.raises(ValidationError) as exc_info:
+            RegistrarExcepcionDTO(
+                usuario_id=uuid4(),
+                motivo="Fechas invertidas",
+                fecha_inicio=ahora,
+                fecha_fin=ahora - timedelta(minutes=1),
+            )
+        assert (
+            "La fecha de fin de la excepción académica no puede ser anterior a la fecha de inicio"
+            in str(exc_info.value)
+        )
+
+        # fecha_fin == fecha_inicio es válido
+        dto = RegistrarExcepcionDTO(
+            usuario_id=uuid4(),
+            motivo="Misma fecha y hora",
+            fecha_inicio=ahora,
+            fecha_fin=ahora,
+        )
+        assert dto.fecha_fin == ahora
+
+
+@pytest.mark.unit
 class TestExcepcionAcademicaDTO:
     """Tests para ExcepcionAcademicaDTO."""
 

@@ -3,6 +3,9 @@
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from prestamos_recursos.contexts.catalogo.application.services import (
+    RecursoApplicationService,
+)
 from prestamos_recursos.contexts.catalogo.infrastructure.repositories import (
     SqlRecursoRepository,
 )
@@ -44,10 +47,11 @@ def get_prestamo_service(
         excepcion_academica_repository=SqlExcepcionAcademicaRepository(session),
         usuario_repository=SqlUsuarioRepository(session),
     )
+    catalogo_service = RecursoApplicationService(SqlRecursoRepository(session))
     return PrestamoService(
         prestamo_repository=SqlPrestamoRepository(session),
         checklist_repository=SqlChecklistRepository(session),
         garantia_repository=SqlGarantiaRepository(session),
         reputacion_service=reputacion_service,
-        recurso_repository=SqlRecursoRepository(session),
+        catalogo_service=catalogo_service,
     )

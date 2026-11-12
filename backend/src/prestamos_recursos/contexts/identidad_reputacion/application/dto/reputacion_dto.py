@@ -59,6 +59,21 @@ class RegistrarExcepcionDTO(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @model_validator(mode="after")
+    def validar_rango_fechas(self) -> Self:
+        """RF-06: valida que la fecha de fin no sea anterior a la de inicio."""
+        inicio = self.fecha_inicio
+        fin = self.fecha_fin
+        if inicio.tzinfo is None:
+            inicio = inicio.replace(tzinfo=UTC)
+        if fin.tzinfo is None:
+            fin = fin.replace(tzinfo=UTC)
+        if fin < inicio:
+            raise ValueError(
+                "La fecha de fin de la excepción académica no puede ser anterior a la fecha de inicio"
+            )
+        return self
+
 
 class SancionDTO(BaseModel):
     """DTO para representar una sanción en respuestas de API."""

@@ -7,6 +7,7 @@ import pytest
 from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
 from prestamos_recursos.contexts.prestamos.application.dto.prestamo_dto import PrestamoDTO
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
+from prestamos_recursos.contexts.prestamos.domain.entities.garantia import Garantia
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_garantia import EstadoGarantia
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
@@ -388,6 +389,107 @@ def test_contar_prestamos_en_curso():
 
     conteo = service.contar_prestamos_en_curso(usuario_id)
     assert conteo == 3
+
+
+def test_procesar_devolucion_sin_danos_libera_garantia():
+    recurso_id = uuid4()
+    prestamo_id = uuid4()
+    prestamo = Prestamo(
+        id=prestamo_id,
+        reserva_id=uuid4(),
+        recurso_id=recurso_id,
+        usuario_id=uuid4(),
+        fecha_inicio=datetime.now(UTC) - timedelta(days=2),
+        fecha_fin=datetime.now(UTC) + timedelta(days=2),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    fecha_reg = datetime.now(UTC) - timedelta(days=2)
+    garantia = Garantia(
+        prestamo_id=prestamo_id,
+        tipo=TipoGarantia.CARNET_UNIVERSITARIO,
+        estado=EstadoGarantia.REGISTRADA,
+        fecha_registro=fecha_reg,
+        compromiso=CompromisoResponsabilidad(
+            contenido="Compromiso",
+            fecha_firma=fecha_reg,
+            firma_url="https://example.com/firma.png",
+            testigo="Operador",
+        ),
+    )
+    prestamo_repo = FakePrestamoRepository([prestamo])
+    garantia_repo = FakeGarantiaRepository()
+    garantia_repo.guardar(garantia)
+    checklist_repo = FakeChecklistRepository()
+    recurso_repo = FakeRecursoRepository()
+
+    service = PrestamoService(
+        prestamo_repository=prestamo_repo,
+        checklist_repository=checklist_repo,
+        garantia_repository=garantia_repo,
+        recurso_repository=recurso_repo,
+    )
+
+    dias = service.procesar_devolucion(prestamo_id, danos_detectados=False)
+    assert dias == 0
+    assert garantia.estado == EstadoGarantia.LIBERADA
+    assert garantia.fecha_liberacion is not None
+
+    inspecciones = service.consultar_inspecciones(prestamo_id)
+    assert inspecciones["garantia"] is not None
+    assert inspecciones["garantia"]["estado"] == EstadoGarantia.LIBERADA.value
+    assert inspecciones["garantia"]["fecha_liberacion"] == garantia.fecha_liberacion
+
+
+def test_procesar_devolucion_con_danos_retiene_garantia():
+    recurso_id = uuid4()
+    prestamo_id = uuid4()
+    prestamo = Prestamo(
+        id=prestamo_id,
+        reserva_id=uuid4(),
+        recurso_id=recurso_id,
+        usuario_id=uuid4(),
+        fecha_inicio=datetime.now(UTC) - timedelta(days=2),
+        fecha_fin=datetime.now(UTC) + timedelta(days=2),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    fecha_reg = datetime.now(UTC) - timedelta(days=2)
+    garantia = Garantia(
+        prestamo_id=prestamo_id,
+        tipo=TipoGarantia.CARNET_UNIVERSITARIO,
+        estado=EstadoGarantia.REGISTRADA,
+        fecha_registro=fecha_reg,
+        compromiso=CompromisoResponsabilidad(
+            contenido="Compromiso",
+            fecha_firma=fecha_reg,
+            firma_url="https://example.com/firma.png",
+            testigo="Operador",
+        ),
+    )
+    prestamo_repo = FakePrestamoRepository([prestamo])
+    garantia_repo = FakeGarantiaRepository()
+    garantia_repo.guardar(garantia)
+    checklist_repo = FakeChecklistRepository()
+    recurso_repo = FakeRecursoRepository()
+
+    service = PrestamoService(
+        prestamo_repository=prestamo_repo,
+        checklist_repository=checklist_repo,
+        garantia_repository=garantia_repo,
+        recurso_repository=recurso_repo,
+    )
+
+    dias = service.procesar_devolucion(
+        prestamo_id, observaciones_retorno="Pantalla rota", danos_detectados=True
+    )
+    assert dias == 0
+    assert garantia.estado == EstadoGarantia.RETENIDA
+    assert garantia.fecha_liberacion is None
+
+    inspecciones = service.consultar_inspecciones(prestamo_id)
+    assert inspecciones["garantia"] is not None
+    assert inspecciones["garantia"]["estado"] == EstadoGarantia.RETENIDA.value
+    assert inspecciones["garantia"]["fecha_liberacion"] is None
+
 
 
 

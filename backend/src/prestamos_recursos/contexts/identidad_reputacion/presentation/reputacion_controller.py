@@ -165,6 +165,10 @@ def registrar_excepcion(
         )
     except UsuarioNoEncontrado as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
 
 
 @router.post("/excepciones/{excepcion_id}/anular", response_model=ExcepcionAcademicaDTO)
