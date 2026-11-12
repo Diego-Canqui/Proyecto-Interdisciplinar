@@ -28,6 +28,28 @@ function fechaLocalMinima() {
   return ahora.toISOString().slice(0, 16);
 }
 
+function formatearFechaNominalUTC(fechaLocalStr) {
+  if (!fechaLocalStr) return "";
+  if (fechaLocalStr.endsWith("Z")) return fechaLocalStr;
+  if (fechaLocalStr.length === 16) {
+    return `${fechaLocalStr}:00Z`;
+  }
+  return `${fechaLocalStr}Z`;
+}
+
+function esHorarioAtencionValido(fechaIsoNominal) {
+  const d = new Date(fechaIsoNominal);
+  if (Number.isNaN(d.getTime())) return false;
+  const diaSemana = d.getUTCDay(); // 0 = Domingo, 1 = Lunes, ..., 5 = Viernes, 6 = Sábado
+  if (diaSemana < 1 || diaSemana > 5) return false;
+  const horas = d.getUTCHours();
+  const minutos = d.getUTCMinutes();
+  const segundos = d.getUTCSeconds();
+  const segundosTotales = horas * 3600 + minutos * 60 + segundos;
+  if (segundosTotales < 8 * 3600 || segundosTotales > 20 * 3600) return false;
+  return true;
+}
+
 function calcularFechaMaxima(fechaInicioStr) {
   if (!fechaInicioStr) return undefined;
   const fecha = new Date(fechaInicioStr);
@@ -163,10 +185,18 @@ export default function MisReservasPage() {
       return;
     }
 
-    const inicio = new Date(fechaInicio);
-    const fin = new Date(fechaFin);
+    const inicioIso = formatearFechaNominalUTC(fechaInicio);
+    const finIso = formatearFechaNominalUTC(fechaFin);
+    const inicio = new Date(inicioIso);
+    const fin = new Date(finIso);
+
     if (fin <= inicio) {
       setError("La fecha de fin debe ser posterior a la fecha de inicio.");
+      return;
+    }
+
+    if (fin - inicio < 60 * 60 * 1000) {
+      setError("La duración mínima de una reserva es de 1 hora.");
       return;
     }
 
@@ -175,13 +205,20 @@ export default function MisReservasPage() {
       return;
     }
 
+    if (!esHorarioAtencionValido(inicioIso) || !esHorarioAtencionValido(finIso)) {
+      setError(
+        "El horario de atención para entregas y devoluciones es de lunes a viernes de 08:00 a 20:00."
+      );
+      return;
+    }
+
     setEnviando(true);
     try {
       const reservaCreada = await solicitarReserva({
         usuario_id: usuario.id,
         recurso_id: recursoId,
-        fecha_inicio: inicio.toISOString(),
-        fecha_fin: fin.toISOString(),
+        fecha_inicio: inicioIso,
+        fecha_fin: finIso,
       });
       if (reservaCreada?.estado === "PENDIENTE") {
         setExito(
@@ -306,14 +343,24 @@ export default function MisReservasPage() {
                     required
                   >
                     <option value="">Selecciona un recurso</option>
-                    {recursos.map((recurso) => (
-                      <option key={recurso.id} value={recurso.id}>
-                        {recurso.nombre} — {recurso.categoria} ({recurso.estado})
-                      </option>
-                    ))}
+                    {recursos.map((recurso) => {
+                      const noDisponible =
+                        recurso.estado === "MANTENIMIENTO" ||
+                        recurso.estado === "FUERA_DE_SERVICIO";
+                      return (
+                        <option
+                          key={recurso.id}
+                          value={recurso.id}
+                          disabled={noDisponible}
+                        >
+                          {recurso.nombre} — {recurso.categoria} ({recurso.estado})
+                          {noDisponible ? " — (No disponible para reservas)" : ""}
+                        </option>
+                      );
+                    })}
                   </select>
                   <span className="campo__ayuda">
-                    Si el horario se cruza con otra reserva, el sistema rechazará la solicitud.
+                    Horario de atención: lunes a viernes de 08:00 a 20:00. Duración: de 1 hora a 7 días. Anticipación máxima: 30 días. Si el horario se cruza con otra reserva, entrará en lista de espera priorizada por reputación.
                   </span>
                 </div>
 
@@ -343,7 +390,7 @@ export default function MisReservasPage() {
                     required
                   />
                   <span className="campo__ayuda">
-                    La duración máxima de una reserva es de 7 días.
+                    Horario de atención: lunes a viernes de 08:00 a 20:00. Duración: de 1 hora a 7 días.
                   </span>
                 </div>
 

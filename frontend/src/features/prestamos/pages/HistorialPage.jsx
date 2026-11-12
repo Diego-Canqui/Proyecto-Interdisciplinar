@@ -624,6 +624,9 @@ export default function HistorialPage() {
                   <p><strong>Estado:</strong> {inspeccionVisualizada.garantia.estado}</p>
                   <p><strong>Testigo:</strong> {inspeccionVisualizada.garantia.testigo}</p>
                   <p><strong>Fecha:</strong> {mostrarFecha(inspeccionVisualizada.garantia.fecha_registro)}</p>
+                  {inspeccionVisualizada.garantia.fecha_liberacion && (
+                    <p><strong>Fecha liberación:</strong> {mostrarFecha(inspeccionVisualizada.garantia.fecha_liberacion)}</p>
+                  )}
                 </div>
               ) : (
                 <p style={{ fontSize: "0.85rem", color: "var(--texto-secundario)" }}>Sin garantía registrada aún.</p>
