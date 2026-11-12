@@ -33,6 +33,7 @@ class SqlReservaRepository(ReservaRepository):
         modelo.fecha_inicio = reserva.fecha_inicio
         modelo.fecha_fin = reserva.fecha_fin
         modelo.estado = reserva.estado
+        self._session.flush()
 
     def obtener_por_id(self, id: UUID) -> Reserva | None:
         modelo = self._session.get(ReservaModel, id)

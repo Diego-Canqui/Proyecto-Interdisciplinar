@@ -42,6 +42,7 @@ Cada integrante cuenta con su propio documento detallado en esta carpeta:
 ## 3. Política de Transacciones en Base de Datos (Decisión D13)
 
 - **Único dueño de la transacción:** El generador `get_session` en `backend/src/prestamos_recursos/shared/database.py` es el único responsable de hacer `session.commit()` al finalizar con éxito una petición HTTP y `session.rollback()` si ocurre cualquier excepción.
+- **El `commit` ocurre antes de responder:** Todas las dependencias que inyectan la sesión usan `Depends(get_session, scope="function")`. Con el alcance por defecto (`request`) FastAPI enviaba la respuesta `201`/`200` al navegador *antes* de ejecutar el `commit`, y un `GET` inmediato (por ejemplo, recargar la lista de reservas tras crear una) podía no ver aún el dato. Con `scope="function"` el `commit` se confirma antes de enviar la respuesta.
 - **Repositorios sin commit:** Todos los repositorios SQL (`SqlUsuarioRepository`, `SqlPerfilReputacionRepository`, `SqlRecursoRepository`, `SqlReservaRepository`, `SqlPrestamoRepository`, etc.) utilizan `session.flush()` en lugar de `session.commit()`.
 - **Por qué existe esta política:** Garantiza atomicidad cuando una petición coordina varios cambios (por ejemplo, al devolver un préstamo con daños se actualiza el préstamo a `DEVUELTO`, se guarda el checklist de retorno, se cambia el recurso a `MANTENIMIENTO` y se registra una sanción en la reputación del usuario; si cualquiera de esos pasos falla, se revierte toda la operación).
 
@@ -82,7 +83,15 @@ Cada integrante cuenta con su propio documento detallado en esta carpeta:
 5. **Devolución (`prestamos` → `catalogo` + `identidad_reputacion`):** Solo se habilita en ventanilla para préstamos en estado `ENTREGADO` o `VENCIDO`. Al devolver el bien, el gestor registra el `Checklist` de retorno (`ESTADO_DEVOLUCION`).
    - **Ciclo de vida de la Garantía (Spec 007):** Si `danos_detectados == False`, la garantía asociada pasa automáticamente a `LIBERADA` (registrando `fecha_liberacion`, visible en inspecciones); si `danos_detectados == True`, la garantía pasa a `RETENIDA`.
    - **Puntual y sin daños:** El préstamo pasa a `DEVUELTO`, el recurso vuelve a `DISPONIBLE` y el usuario gana **+10 puntos** de reputación (`premiar_devolucion_puntual`).
-   - **Retraso en la entrega:** Se aplica sanción `TARDANZA` (-10 puntos, deuda $0, gracia de 1 día: si el retraso es ≤ 1 día no hay bloqueo; a partir del segundo día, bloqueo 1:1 en días).
-   - **Daños físicos:** Se aplica sanción `DANO_PARCIAL` (-30 puntos, deuda $50, bloqueo de 30 días) o `DANO_TOTAL` (-100 puntos, deuda = valor del recurso, bloqueo de 60 días), pasando el recurso automáticamente a `MANTENIMIENTO` o `FUERA_DE_SERVICIO`.
-   - **Inasistencia a reserva:** Sanción `INASISTENCIA_RESERVA` (-15 puntos, deuda $0, bloqueo fijo de 3 días).
+   - **Retraso en la entrega (por días calendario en UTC):** Se aplica sanción `TARDANZA` (−10 pts, deuda $0). Con 1 día de retraso solo descuenta puntos (gracia de 1 día); desde 2 días de retraso bloquea 1 día por cada día de retraso.
+   - **Daños físicos:** Se aplica sanción `DANO_PARCIAL` (−30 pts, deuda $50, bloqueo de 30 días) y el recurso pasa automáticamente a `MANTENIMIENTO`. `DANO_TOTAL` (−100 pts, deuda = valor del recurso, bloqueo de 60 días) la registra gestión manualmente.
+   - **Inasistencia a reserva:** Sanción `INASISTENCIA_RESERVA` (−15 pts, deuda $0, bloqueo fijo de 3 días), registrada manualmente por gestión (`POST /reputacion/sanciones`).
+
+---
+
+## 6. Limitaciones Conocidas y Trabajo Futuro
+
+1. **Checklist de inspección fijo (pendiente para `catalogo` + `prestamos`):** El formulario de entrega de `/historial` muestra siempre las mismas 4 casillas (carcasa, pantalla, cables/cargador y nº de serie), sin importar el tipo de recurso. Lo correcto es que `catalogo` exponga los criterios de inspección según la categoría del recurso y que `prestamos` los muestre y los guarde de forma estructurada (hoy se guardan concatenados en `observaciones`). Para demostrar el flujo actual se usa un recurso de tipo cómputo (la *Laptop Dell Latitude 5420* del seed).
+2. **Sanciones automáticas parciales:** Solo `TARDANZA` y `DANO_PARCIAL` se aplican automáticamente al devolver; `INASISTENCIA_RESERVA` y `DANO_TOTAL` son manuales. Las reservas `CONFIRMADA` no expiran por sí solas (`VENCIDA` existe en el enum pero no hay tarea que la asigne).
+3. **Cálculo de retraso en UTC:** `calcular_dias_retraso` compara fechas en UTC, no en hora local; una devolución cerca de la medianoche local puede contar un día de más.
 

@@ -15,7 +15,7 @@
 2. **Flujo de Entrega Física y Cancelación en Ventanilla (`Garantia` + `Checklist` de salida, Spec 006):**
    - Mientras el préstamo está en estado `ACTIVO` (aún en ventanilla y no entregado físicamente), el gestor puede formalizar la entrega o **cancelar el préstamo en ventanilla** (`POST /prestamos/{id}/cancelar`) si el solicitante no asiste o desiste, pasando el préstamo a `CANCELADO` y liberando el recurso a `DISPONIBLE` en el catálogo sin penalizar la reputación.
    - Registro de la garantía institucional (`CARNET_UNIVERSITARIO`, `DOCUMENTO_IDENTIDAD`, `DEPOSITO_ECONOMICO`, `OTRO`) junto con el Value Object `CompromisoResponsabilidad` (contenido del acuerdo, firma, fecha y nombre del testigo/operador).
-   - Registro y confirmación del `Checklist` técnico de salida (`ESTADO_INICIAL`: carcasa, pantalla, cables/cargador, coincidencia de nº de serie, observaciones y evidencia fotográfica).
+   - Registro y confirmación del `Checklist` técnico de salida (`ESTADO_INICIAL`: carcasa, pantalla, cables/cargador, coincidencia de nº de serie, observaciones y evidencia fotográfica). **Limitación conocida:** estas 4 casillas están fijas en el frontend (`HistorialPage.jsx`) y no dependen del tipo de recurso (ver «Trabajo futuro»); el resultado se guarda como texto en `observaciones`.
    - Transición del préstamo a `ENTREGADO` y premio automático en la reputación del usuario si recogió puntualmente.
 
 3. **Flujo de Devolución con Inspección de Retorno y Detección de Daños (`procesar_devolucion`):**
@@ -64,9 +64,10 @@ Un préstamo pasa por los siguientes estados:
        - El recurso pasa automáticamente a **`MANTENIMIENTO`**.
        - La garantía asociada pasa a **`RETENIDA`** (`fecha_liberacion = None`).
   3. **Impacto en reputación (`identidad_reputacion`):**
-     - Si `danos_detectados == True`: aplica sanción **`DANO_PARCIAL`** (-30 pts, deuda $50, bloqueo 30 días) o **`DANO_TOTAL`** (-100 pts, deuda = valor del recurso, bloqueo 60 días).
-     - Si `dias_retraso > 0`: aplica sanción **`TARDANZA`** (-10 pts, deuda $0, gracia 1 día; desde el 2º día, bloqueo 1:1 en días).
+     - Si `danos_detectados == True`: aplica sanción **`DANO_PARCIAL`** (−30 pts, deuda de $50, 30 días de bloqueo) con el detalle de la observación técnica. `DANO_TOTAL` (−100 pts, deuda = valor del recurso, 60 días) se registra manualmente por gestión.
+     - Si `dias_retraso > 0`: aplica sanción **`TARDANZA`** (−10 pts, deuda $0). Con 1 día de retraso solo descuenta puntos (gracia de 1 día); desde 2 días bloquea 1 día por cada día de retraso.
      - Si `dias_retraso == 0` y `danos_detectados == False`: premia al usuario con **`premiar_devolucion_puntual`** (**+10 puntos**, tope 1000).
+     - El retraso se calcula por días calendario en UTC; `prestamos.prestamos` no guarda la fecha real de devolución (solo la fecha de inspección del checklist de retorno).
 
 ### Política 4: Prórroga / Renovación (`solicitar_prorroga` y `renovar`)
 - Un préstamo solo es apto para renovación si su estado es `ACTIVO` o `ENTREGADO`, los días solicitados son mayores a 0 y la fecha actual aún no ha superado `fecha_fin` (`fecha_actual <= fecha_fin`).
@@ -89,7 +90,7 @@ Un préstamo pasa por los siguientes estados:
   - `calcular_dias_retraso(fecha_referencia)` y `devolver(fecha_devolucion)`: Cambia el estado a `DEVUELTO` y retorna los días de mora.
   - `solicitar_prorroga(dias, fecha_actual)` y `renovar(dias, fecha_actual)`: Validan vigencia y extienden `fecha_fin`.
 - **`entities/garantia.py` (`Garantia`)** y **`value_objects/compromiso_responsabilidad.py` (`CompromisoResponsabilidad`)**:
-  - Validan la firma, el testigo y gestionan el ciclo de vida de la garantía: nace en `REGISTRADA` con `fecha_registro`, pasa a `LIBERADA` con `fecha_liberacion` mediante `liberar()` cuando no hay daños, o a `RETENIDA` (`fecha_liberacion = None`) mediante `retener()` ante daños físicos (Spec 007).
+  - Validan la firma, el testigo y gestionan el ciclo de vida de la garantía (`PENDIENTE` → `REGISTRADA` → `LIBERADA` / `RETENIDA`): nace con `fecha_registro`, pasa a `LIBERADA` con `fecha_liberacion` mediante `liberar()` cuando no hay daños, o a `RETENIDA` (`fecha_liberacion = None`) mediante `retener()` ante daños físicos (Spec 007).
 - **`entities/checklist.py` (`Checklist`)**:
   - `agregar_item(observaciones, fotos_urls)` y `confirmar()` (`completo = True`). Soporta `TipoChecklist.ESTADO_INICIAL` y `TipoChecklist.ESTADO_DEVOLUCION`.
 
@@ -113,3 +114,9 @@ Un préstamo pasa por los siguientes estados:
 - **`frontend/src/features/prestamos/pages/HistorialPage.jsx`**:
   - Ventanilla de préstamos con acciones segregadas por estado (en `ACTIVO` muestra «📋 Realizar Entrega» y «✕ Cancelar Préstamo»; en `ENTREGADO` y `VENCIDO` muestra «📥 Registrar Devolución»), filtro por estado incluyendo `CANCELADO`, desplazamiento automático (`scrollIntoView`) al abrir paneles, formulario modal de **Inspección de Salida y Garantía**, formulario de **Inspección de Retorno con detección de daños**, y visor de **Checklist y Garantía** mostrando `Fecha liberación` si fue liberada (Spec 007).
 
+---
+
+## 4. Trabajo futuro y limitaciones conocidas
+
+- **Checklist dinámico por recurso (catálogo + préstamos):** hoy el checklist de salida tiene 4 casillas fijas (carcasa, pantalla, cables/cargador, nº de serie). Debe generarse según los criterios de inspección que `catalogo` exponga para cada categoría de recurso, y guardarse de forma estructurada en vez de texto concatenado.
+- **Fecha real de devolución:** `prestamos.prestamos` no la almacena; se recomienda añadirla para auditar retrasos.

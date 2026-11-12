@@ -28,9 +28,13 @@
 ## 2. Políticas y Reglas de Negocio del Módulo
 
 ### Política 1: Integridad de Datos y Ficha Técnica Obligatoria
-- Ningún recurso puede existir con nombre vacío, categoría vacía o sin una `FichaTecnica` válida (`ficha_tecnica.es_valida()`).
+- Ningún recurso puede crearse sin una `FichaTecnica` válida (`ficha_tecnica.es_valida()`, validada en `RecursoApplicationService.crear_recurso`; si no lo es, el endpoint responde `400`). Hoy `nombre` y `categoria` son obligatorios solo como campos requeridos del DTO (pueden llegar como cadena vacía): validarlos en el dominio es una mejora pendiente.
 - En la ficha técnica son obligatorios: `marca`, `modelo`, `numero_serie` y `estado_fisico` (no pueden ser cadenas vacías).
 - El `numero_serie` tiene restricción `UNIQUE` en la tabla `catalogo.recursos` para impedir duplicar el mismo bien físico.
+
+### Limitación conocida: criterios de inspección por tipo de recurso
+- El catálogo todavía no expone qué se debe inspeccionar de cada recurso. El checklist de entrega de `prestamos` usa 4 casillas fijas (carcasa, pantalla, cables/cargador, nº de serie), pensadas para equipos de cómputo, y también aparecen al entregar un libro.
+- **Tarea futura (catálogo + préstamos):** añadir a la ficha (`FichaTecnica`/`RecursoDTO`) una lista de criterios de inspección según la categoría (`Cómputo`, `Multimedia`, `Laboratorio`, `Libros`) para que el frontend de `prestamos` genere las casillas dinámicamente.
 
 ### Política 2: Ciclo de Estados Operativos (`EstadoRecurso`)
 Todo recurso se encuentra siempre en uno de estos 4 estados:
@@ -40,7 +44,7 @@ Todo recurso se encuentra siempre en uno de estos 4 estados:
 - **`FUERA_DE_SERVICIO`**: El recurso fue dado de baja o presenta daño irreparable.
 
 ### Política 3: Regla de Disponibilidad y Conexión con Préstamos y Reservas (Spec 007)
-- Un recurso solo reporta `disponible = True` cuando su estado es exactamente `EstadoRecurso.DISPONIBLE` (`recurso.esta_disponible()`).
+- Un recurso solo reporta `disponible = True` en `GET /recursos/{id}/disponibilidad` cuando su estado es exactamente `EstadoRecurso.DISPONIBLE` (`estado == DISPONIBLE`). `PrestamoService.solicitar_prestamo` también exige `DISPONIBLE` al iniciar el préstamo.
 - **Validación del estado operativo al reservar (Spec 007):**
   - Al solicitar una reserva, `ReservaService` consulta a `RecursoApplicationService`. Se admiten solicitudes de reserva si el recurso está en **`DISPONIBLE`** o **`EN_USO`** (en este último caso para fechas futuras o cola de espera).
   - Si el recurso está en **`MANTENIMIENTO`** o **`FUERA_DE_SERVICIO`**, el sistema rechaza la reserva con `409 Conflict` (`"el recurso no admite reservas por encontrarse en mantenimiento o fuera de servicio"`).
@@ -58,9 +62,11 @@ Todo recurso se encuentra siempre en uno de estos 4 estados:
 
 ### Capa de Dominio (`contexts/catalogo/domain/`)
 - **`entities/recurso.py` (`Recurso`)**:
-  - `__post_init__()`: Valida que `nombre` y `categoria` no estén vacíos y que `ficha_tecnica` sea instancia de `FichaTecnica`.
-  - `esta_disponible() -> bool`: Devuelve `True` únicamente si `self.estado == EstadoRecurso.DISPONIBLE`.
-  - `cambiar_estado(nuevo_estado: EstadoRecurso)`: Valida que el nuevo estado sea un `EstadoRecurso` válido y actualiza la entidad.
+  - Dataclass del Aggregate Root con `nombre`, `descripcion`, `categoria`, `estado` y `ficha_tecnica`.
+  - `marcar_disponible()`: Pone el recurso en `DISPONIBLE`; lanza `ValueError` si está `FUERA_DE_SERVICIO`.
+  - `marcar_no_disponible()`: Pone el recurso en `EN_USO`.
+  - `actualizar_estado(nuevo_estado: EstadoRecurso)`: Valida (`TypeError`) que sea un `EstadoRecurso` y actualiza la entidad.
+  - La validación de que `nombre`, `categoria` y la ficha sean válidos se hace en `RecursoApplicationService.crear_recurso` (con `FichaTecnica.es_valida()`).
 - **`value_objects/ficha_tecnica.py` (`FichaTecnica`)**:
   - Value Object inmutable (`@dataclass(frozen=True)`) con el método `es_valida()` que exige `marca`, `modelo`, `numero_serie` y `estado_fisico`.
 - **`enums/estado_recurso.py` (`EstadoRecurso`)**:

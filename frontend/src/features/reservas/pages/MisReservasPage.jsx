@@ -220,6 +220,12 @@ export default function MisReservasPage() {
         fecha_inicio: inicioIso,
         fecha_fin: finIso,
       });
+      if (reservaCreada?.id) {
+        setReservas((prev) => [
+          ...prev.filter((r) => r.id !== reservaCreada.id),
+          reservaCreada,
+        ]);
+      }
       if (reservaCreada?.estado === "PENDIENTE") {
         setExito(
           "El horario ya tiene una reserva confirmada. Tu solicitud quedó en lista de espera (PENDIENTE) y se priorizará según tu reputación."
@@ -243,7 +249,12 @@ export default function MisReservasPage() {
     setExito("");
     setAccionId(idReserva);
     try {
-      await confirmarReserva(idReserva);
+      const confirmada = await confirmarReserva(idReserva);
+      if (confirmada?.id) {
+        setReservas((prev) =>
+          prev.map((r) => (r.id === confirmada.id ? confirmada : r))
+        );
+      }
       await cargarReservas(usuario);
       setExito("Reserva confirmada.");
     } catch (errorAccion) {
@@ -259,6 +270,7 @@ export default function MisReservasPage() {
     setAccionId(idReserva);
     try {
       await convertirReservaAPrestamo(idReserva);
+      setReservas((prev) => prev.filter((r) => r.id !== idReserva));
       const [, listaRecursos] = await Promise.all([
         cargarReservas(usuario),
         buscarRecursos(),
@@ -278,6 +290,7 @@ export default function MisReservasPage() {
     setAccionId(idReserva);
     try {
       await cancelarReserva(idReserva);
+      setReservas((prev) => prev.filter((r) => r.id !== idReserva));
       await cargarReservas(usuario);
       setExito("Reserva cancelada.");
     } catch (errorAccion) {

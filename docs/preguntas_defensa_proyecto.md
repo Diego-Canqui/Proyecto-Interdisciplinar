@@ -16,7 +16,8 @@
 8. [¿Quién hace el commit en la base de datos? (Unit of Work y Transacciones)](#8-quién-hace-el-commit-en-la-base-de-datos-unit-of-work-y-transacciones)
 9. [¿Cómo protegen contraseñas y sesiones? (Bcrypt + JWT)](#9-cómo-protegen-contraseñas-y-sesiones-bcrypt--jwt)
 10. [¿Cómo prueban el sistema y aseguran la calidad? (Pytest + Ruff)](#10-cómo-prueban-el-sistema-y-aseguran-la-calidad-pytest--ruff)
-11. [Chuleta rápida: «Para responder en 10 segundos»](#11-chuleta-rápida-para-responder-en-10-segundos)
+11. [¿Cuáles son las reglas de negocio clave? (Reputación, Sanciones y Roles)](#11-cuáles-son-las-reglas-de-negocio-clave-reputación-sanciones-y-roles)
+12. [Chuleta rápida: «Para responder en 10 segundos»](#12-chuleta-rápida-para-responder-en-10-segundos)
 
 ---
 
@@ -49,12 +50,12 @@
 > *"No tenemos todas las tablas revueltas en el esquema por defecto (`public`). En PostgreSQL creamos **4 esquemas (schemas) lógicos**, exactamente uno por cada Bounded Context del equipo: `identidad_reputacion`, `catalogo`, `reservas` y `prestamos`."*
 
 ### Tabla de organización por integrante:
-| Esquema (Schema) | Integrante / Responsable | Tablas principales | Propósito |
+| Esquema (Schema) | Integrante / Responsable | Tablas reales (PostgreSQL) | Propósito |
 |---|---|---|---|
-| `identidad_reputacion` | Persona 1 (Líder) | `usuario`, `perfil_reputacion`, `sancion`, `excepcion_academica` | Usuarios, credenciales, historial de sanciones y cálculo de reputación |
-| `catalogo` | Persona 2 | `recurso`, `ficha_tecnica` | Inventario de recursos, categorización y especificaciones técnicas |
-| `reservas` | Persona 3 | `reserva`, `turnos` | Solicitudes y asignación de franjas horarias prioritarias |
-| `prestamos` | Persona 4 | `prestamo`, `devolucion`, `incidencia` | Ciclo de entrega física, seguimiento activo y recepción de recursos |
+| `identidad_reputacion` | Persona 1 (Líder) | `usuario`, `perfiles_reputacion`, `sancion`, `excepciones_academicas` | Usuarios, credenciales, historial de sanciones, excepciones y cálculo de reputación |
+| `catalogo` | Persona 2 | `recursos` | Inventario de recursos categorizados y especificaciones técnicas en atributos JSON |
+| `reservas` | Persona 3 | `reservas` | Solicitudes, franjas horarias y estados de reserva para préstamos |
+| `prestamos` | Persona 4 | `prestamos`, `checklists`, `garantias` | Ciclo de entrega física, checklists de inspección, garantías y devolución |
 
 ### ¿Cómo se crean los esquemas?
 - En el archivo `db/init.sql`, ejecutado automáticamente al iniciar Docker por primera vez:
@@ -219,7 +220,7 @@ flowchart LR
 ## 8. ¿Quién hace el commit en la base de datos? (Unit of Work y Transacciones)
 
 ### Respuesta directa:
-> *"El commit de la base de datos **lo realiza exclusivamente la dependencia compartida `shared.get_session`**, implementando el patrón **Unit of Work por petición HTTP (Decisión D13)**. Los repositorios y servicios de aplicación **NUNCA hacen `commit()`**, únicamente hacen `flush()` para obtener IDs autogenerados."*
+> *"El commit de la base de datos **lo realiza exclusivamente la dependencia compartida `shared.get_session`**, implementando el patrón **Unit of Work por petición HTTP (Decisión D13)**. Los repositorios y servicios de aplicación **NUNCA hacen `commit()`**, únicamente hacen `flush()` para sincronizar con la sesión y obtener IDs autogenerados."*
 
 ### ¿Por qué se diseñó así? (Frontera de Transacción Atómica)
 Si un repositorio hiciera `commit()` internamente y el proceso fallara en el siguiente paso (por ejemplo, validando una regla o enviando una respuesta 400), la base de datos quedaría en un **estado inconsistente con escrituras parciales**.
@@ -241,11 +242,19 @@ def get_session() -> Iterator[Session]:
             raise
 ```
 
+### Detalle técnico de arquitectura (FastAPI y `scope="function"`):
+> [!NOTE]
+> En FastAPI 0.141+, las dependencias generadoras con yield por defecto pueden retardar el commit post-yield hasta después del envío del stream HTTP. Para evitar condiciones de carrera (race conditions) donde el frontend hace un `GET` inmediato tras un `POST` (por ejemplo, crear una reserva o préstamo) y no encuentra el registro, inyectamos la sesión en los controladores con:
+> ```python
+> session: Session = Depends(get_session, scope="function")
+> ```
+> Esto garantiza que `session.commit()` se complete sincrónicamente antes de que el socket de respuesta HTTP viaje al navegador. Asimismo, cada repositorio ejecuta `self._session.flush()` en su método `guardar()`.
+
 ### Resumen del ciclo de vida de una transacción:
 1. Llega la petición HTTP a FastAPI.
 2. `get_session()` abre la sesión en la base de datos.
 3. El servicio y el repositorio realizan cambios y usan `session.flush()` si necesitan que la BD asigne claves foráneas o IDs.
-4. Si el endpoint responde correctamente: `get_session` ejecuta `session.commit()`.
+4. Si el endpoint responde correctamente: `get_session` ejecuta `session.commit()` de forma sincrónica.
 5. Si ocurre cualquier error: `get_session` ejecuta `session.rollback()` y nada queda guardado.
 
 ---
@@ -305,7 +314,37 @@ cd backend
 
 ---
 
-## 11. Chuleta rápida: «Para responder en 10 segundos»
+## 11. ¿Cuáles son las reglas de negocio clave? (Reputación, Sanciones y Roles)
+
+### Respuesta directa:
+> *"El sistema implementa un modelo de gamificación y mitigación de riesgo basado en **Reputación Dinámica (0 a 1000 puntos)**. Todos los usuarios comienzan con **500 puntos (Nivel NORMAL)**. Su comportamiento en entregas y reservas aumenta o disminuye su puntaje, condicionando directamente cuántos recursos puede tener en préstamo a la vez."*
+
+### Escala de niveles y límites de préstamos activos:
+| Nivel de Reputación | Rango de Puntos | Máx. Recursos Simultáneos | Descripción |
+|---|---|---|---|
+| **BAJO** | 0 – 299 | 1 recurso | Usuario con historial de infracciones o reincidencia |
+| **NORMAL** | 300 – 599 | 2 recursos | Nivel de partida estándar para nuevos usuarios (500 pts) |
+| **BUENO** | 600 – 799 | 3 recursos | Usuario cumplido con historial positivo continuo |
+| **EXCELENTE** | 800 – 1000 | 5 recursos | Máxima confianza institucional |
+
+### Sistema de Puntuaciones y Sanciones:
+- **Bonificación:**
+  - Devolución a tiempo: **+10 puntos**.
+- **Penalizaciones:**
+  - **Tardanza en devolución:** **-10 puntos** (con 1 día hábil de gracia antes de penalizar).
+  - **Inasistencia a reserva confirmada:** **-15 puntos** (recurso liberado para otros solicitantes).
+  - **Daño parcial en equipo:** **-30 puntos**.
+  - **Daño total o pérdida:** **-100 puntos** (puede incluir suspensión temporal o proceso administrativo).
+- **Criterio de Elegibilidad:** Un usuario **NO puede solicitar reservas ni préstamos** si su puntaje cae a 0, si tiene sanciones activas pendientes o si cuenta con suspensión temporal.
+
+### Segregación de Roles (Spec 006):
+1. **ESTUDIANTE / DOCENTE (Solicitante):** Consulta catálogo, solicita reservas y visualiza sus propios préstamos y estado de reputación.
+2. **OPERADOR_VENTANILLA (Operativo):** Despacha y recibe en ventanilla física, valida checklists obligatorios de estado y ejecuta la entrega/devolución física del recurso.
+3. **ADMINISTRADOR_SISTEMA (Gestión Integral):** Administra usuarios, aplica o levanta sanciones manuales y excepciones académicas, y audita el catálogo.
+
+---
+
+## 12. Chuleta rápida: «Para responder en 10 segundos»
 
 Usa esta tabla para un repaso de último minuto antes de entrar a la evaluación:
 
@@ -338,11 +377,17 @@ Usa esta tabla para un repaso de último minuto antes de entrar a la evaluación
 │ Comunicación entre módulos │ Bajo acoplamiento: solo IDs primitivos y servicios de     │
 │                            │ aplicación. Prohibido importar entidades de otro módulo.  │
 ├────────────────────────────┼───────────────────────────────────────────────────────────┤
-│ ¿Quién hace el commit?     │ shared.get_session (Unit of Work por petición HTTP).      │
-│                            │ Los repositorios y servicios SOLO hacen flush.            │
+│ ¿Quién hace el commit?     │ shared.get_session (Unit of Work, Decisión D13).          │
+│                            │ Depends(get_session, scope="function") asegura commit     │
+│                            │ sincrónico antes del response HTTP. Repos hacen flush.    │
 ├────────────────────────────┼───────────────────────────────────────────────────────────┤
 │ Contraseñas y sesiones     │ Bcrypt (costo 12) + JWT HS256 (24 horas de vigencia).     │
-│                            │ Autorización por roles (RBAC) y Rate Limit con Slowapi.   │
+│                            │ 4 Roles (ESTUDIANTE, DOCENTE, OPERADOR_VENTANILLA,        │
+│                            │ ADMINISTRADOR_SISTEMA) y Rate Limit con Slowapi.          │
+├────────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Reglas y Reputación        │ Escala 0-1000 pts (inicia en 500). Límites de préstamos:  │
+│                            │ BAJO: 1, NORMAL: 2, BUENO: 3, EXCELENTE: 5 recursos.     │
+│                            │ Tardanza (-10), inasistencia (-15), puntualidad (+10).   │
 ├────────────────────────────┼───────────────────────────────────────────────────────────┤
 │ Pruebas y calidad          │ Pytest (unit, integration, e2e) y linter Ruff.            │
 │                            │ Compilación con Vite (npm run build).                     │

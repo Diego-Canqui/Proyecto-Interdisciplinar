@@ -39,7 +39,7 @@ from prestamos_recursos.shared.database import get_session
 
 
 def get_prestamo_service(
-    session: Session = Depends(get_session),  # noqa: B008
+    session: Session = Depends(get_session, scope="function"),  # noqa: B008
 ) -> PrestamoService:
     """Factory para inyectar `PrestamoService` con sus dependencias reales."""
     reputacion_service = ReputacionService(

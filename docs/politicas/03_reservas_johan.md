@@ -83,10 +83,10 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
 
 ### Capa de Dominio (`contexts/reservas/domain/`)
 - **`entities/reserva.py` (`Reserva`)**:
-  - `Reserva.crear(...)`: Valida horario hábil institucional (Lunes a Viernes 08:00 a 20:00 UTC), duración mínima (1h) y máxima (7d), e inicializa el estado en `PENDIENTE`.
-  - `confirmar(fecha_actual)`: Verifica que esté `PENDIENTE` y vigente en el instante evaluado (`esta_vigente(fecha_actual)`), y pasa a `CONFIRMADA`.
-  - `cancelar()`: Impide cancelar una reserva ya cancelada y pasa el estado a `CANCELADA`.
-  - `esta_vigente(fecha_actual)`: Comprueba si `fecha_fin > ahora` y el estado está activo.
+  - `Reserva.crear(...)`: Valida horario hábil institucional (Lunes a Viernes 08:00 a 20:00 UTC), duración mínima (1h) y máxima (7d), e inicializa el estado en `PENDIENTE`. `__post_init__` valida que `fecha_fin > fecha_inicio`.
+  - `confirmar(fecha_actual)`: Verifica que esté `PENDIENTE` y vigente en el instante evaluado (`esta_vigente(fecha_actual)`), y cambia el estado a `CONFIRMADA`.
+  - `cancelar()`: Impide cancelar una reserva `CANCELADA`, `VENCIDA` o `CONVERTIDA` y pasa el estado a `CANCELADA`.
+  - `esta_vigente(fecha_actual)`: Comprueba si `fecha_fin >= ahora` y el estado está activo (`PENDIENTE` o `CONFIRMADA`).
   - `se_superpone_con(otra: Reserva) -> bool`: Compara en UTC si dos intervalos `[fecha_inicio, fecha_fin)` se solapan.
 - **`services/algoritmo_prioridad_service.py` (`AlgoritmoPrioridadService`)**:
   - `ordenar_cola_espera(reservas, puntajes_reputacion=None)`: Ordena por `(-puntajes.get(r.usuario_id, 500), r.fecha_inicio)`.
@@ -102,6 +102,15 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
 - **`presentation/reserva_controller.py`**:
   - Endpoints `/reservas`, `/reservas/usuario/{id_usuario}`, `/reservas/recurso/{id_recurso}/cola`, `PATCH /reservas/{id}/confirmar`, `POST /reservas/{id}/prestamo` y `PATCH /reservas/{id}/cancelar`.
 - **`frontend/src/features/reservas/pages/MisReservasPage.jsx`**:
+  - Formulario de solicitud (que lee `?recursoId=` si el usuario vino desde el catálogo), alerta informativa cuando una reserva queda en cola de espera por reputación, y tabla de acciones diferenciada por rol (`esGestion`).
   - Función `formatearFechaNominalUTC` para neutralizar desfases de zona horaria del navegador.
-  - Opciones de recursos no operativos deshabilitadas en el selector (`— (No disponible para reservas)`).
+  - Opciones de recursos no operativos (`MANTENIMIENTO` / `FUERA_DE_SERVICIO`) deshabilitadas en el selector (`— (No disponible para reservas)`).
   - Validaciones locales antes de envío (duración 1h a 7d, L–V 08:00 a 20:00) y texto informativo de políticas operativas.
+
+---
+
+## 4. Limitaciones conocidas
+
+- **`VENCIDA` sin asignación automática:** el estado existe en `EstadoReserva` y bloquea la cancelación, pero ninguna tarea lo asigna cuando el usuario no se presenta: una reserva `CONFIRMADA` solo cambia por confirmación, cancelación o conversión a préstamo. La sanción `INASISTENCIA_RESERVA` también se registra manualmente.
+- **Sin bloqueo exclusivo de stock por reserva futura:** al crear una reserva se verifica que el recurso no esté en `MANTENIMIENTO` ni `FUERA_DE_SERVICIO`, pero no se cambia el estado del recurso a «reservado» (el catálogo solo tiene `DISPONIBLE`, `EN_USO`, `MANTENIMIENTO` y `FUERA_DE_SERVICIO`).
+- **Dependencias de código:** `ReservaService` importa `PrestamoService` y `NivelReputacion`; las referencias de datos siguen siendo solo por ID.

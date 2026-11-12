@@ -9,7 +9,7 @@
 > - **Carpeta Backend:** [`backend/src/prestamos_recursos/contexts/prestamos/`](file:///home/satome/Documentos/TI2/Proyecto/Proyecto-Interdisciplinar/backend/src/prestamos_recursos/contexts/prestamos)
 > - **Carpeta Frontend:** [`frontend/src/features/prestamos/`](file:///home/satome/Documentos/TI2/Proyecto/Proyecto-Interdisciplinar/frontend/src/features/prestamos)
 > - **Esquema de PostgreSQL:** `prestamos`
-> - **Tablas en BD:** `prestamos`, `checklist`, `garantias`
+> - **Tablas en BD:** `prestamos`, `checklists`, `garantias`
 
 ---
 
@@ -20,14 +20,15 @@
 > *"Mi módulo implementa el Bounded Context de **Préstamos**, encargado de la transacción física real en ventanilla, custodia activa, verificación técnica y recepción de los recursos.*
 >
 > *Mis componentes clave de dominio son:*
-> 1. **`Prestamo` (Aggregate Root):** Modela el contrato de posesión temporal del bien físico por parte del usuario. Contiene identificadores primitivos (`reserva_id`, `recurso_id`, `usuario_id`), fechas efectivas (`fecha_inicio`, `fecha_fin`) y su `estado: EstadoPrestamo`. Ofrece métodos de negocio como `iniciar()`, `devolver()`, `renovar()`, `vencer()` y `solicitar_prorroga()`.
-> 2. **`Checklist` (Entidad interna del agregado):** Registra la inspección física detallada del equipo (estado de carcasa, pantalla, cargador, puertos, periféricos) en dos momentos críticos: inspección de entrega (salida) e inspección de recepción (retorno). Permite determinar objetivamente si el recurso sufrió daños.
-> 3. **`Garantia` (Entidad interna del agregado):** Administra los documentos o depósitos en garantía retenidos como resguardo en préstamos de alto valor monetario o equipos de laboratorio especializado.
+> 1. **`Prestamo` (Aggregate Root):** Modela el contrato de posesión temporal del bien físico por parte del usuario. Contiene identificadores primitivos (`reserva_id`, `recurso_id`, `usuario_id`), fechas (`fecha_inicio`, `fecha_fin`, copiadas de la reserva al crearlo) y su `estado: EstadoPrestamo`. Ofrece métodos de negocio como `marcar_entregado()`, `devolver()`, `cancelar()`, `renovar()`, `vencer()` y `solicitar_prorroga()`.
+> 2. **`Checklist` (Entidad interna del agregado):** Registra la inspección física del equipo (observaciones y fotos) en dos momentos: `ESTADO_INICIAL` (entrega) y `ESTADO_DEVOLUCION` (retorno). Hoy el frontend ofrece 4 casillas fijas (carcasa, pantalla, cables/cargador, nº de serie) que se guardan como texto en `observaciones`; hacerlas dinámicas según el recurso es trabajo futuro con Catálogo.
+> 3. **`Garantia` (Entidad interna del agregado):** Administra la garantía que el usuario deja al recibir el bien (`CARNET_UNIVERSITARIO`, `DOCUMENTO_IDENTIDAD`, `DEPOSITO_ECONOMICO` u `OTRO`) junto con el Value Object `CompromisoResponsabilidad` (contenido, firma y testigo). Sus estados son `PENDIENTE` → `REGISTRADA`; `LIBERADA` y `RETENIDA` existen, pero `liberar()` y `retener()` aún no están implementados.
 > 4. **`EstadoPrestamo` (Enum de dominio):**
->    - `ACTIVO`: Equipo en manos del usuario dentro del plazo pactado.
->    - `DEVUELTO`: Equipo reingresado a almacén tras inspección.
->    - `RENOVADO`: Plazo de devolución extendido conforme a las reglas.
->    - `VENCIDO` / `EN_MORA`: Superó la fecha máxima sin que el usuario haya hecho la entrega.*"
+>    - `ACTIVO`: Creado desde una reserva confirmada; el recurso ya está `EN_USO` y espera la entrega física en ventanilla.
+>    - `ENTREGADO`: Garantía registrada y checklist de salida confirmado; el bien está en manos del usuario.
+>    - `DEVUELTO`: Bien reingresado a almacén tras la inspección de retorno.
+>    - `VENCIDO`: Superó `fecha_fin` sin devolverse.
+>    - `CANCELADO`: Cancelado en ventanilla estando `ACTIVO`, sin penalizar la reputación.*"
 
 ---
 
@@ -37,17 +38,17 @@
 >
 > *La persistencia se implementa en la capa de infraestructura:*
 > - *Mapeamos las entidades mediante modelos SQLAlchemy (`PrestamoModel`, `ChecklistModel`, `GarantiaModel`) configurados en el esquema `prestamos` de PostgreSQL (`__table_args__ = {"schema": "prestamos"}`).*
-> - *El repositorio `SQLAlchemyPrestamoRepository` implementa la interfaz `PrestamoRepository`.*
-> - *De acuerdo con el patrón **Unit of Work por petición HTTP (Decisión D13)**, el repositorio **NUNCA llama a `session.commit()`**, únicamente usa `session.flush()` para sincronizar y obtener identificadores autogenerados. El commit atómico lo ejecuta la dependencia compartida `shared.get_session` de FastAPI al concluir la petición exitosamente. Si ocurre algún error, se ejecuta el rollback automático evitando datos inconsistentes.*"
+> - *El repositorio `SqlPrestamoRepository` implementa la interfaz `PrestamoRepository`.*
+> - *De acuerdo con el patrón **Unit of Work por petición HTTP (Decisión D13)**, el repositorio **NUNCA llama a `session.commit()`**, únicamente usa `session.flush()` para sincronizar y obtener identificadores autogenerados. El commit atómico lo ejecuta la dependencia compartida `shared.get_session` de FastAPI al concluir la petición exitosamente (inyectada con `scope="function"`, por lo que se confirma antes de enviar la respuesta). Si ocurre algún error, se ejecuta el rollback automático evitando datos inconsistentes.*"
 
 ---
 
 ### Pregunta 3: ¿Cuáles son las reglas de negocio críticas que protege tu Aggregate Root?
 **Respuesta exacta:**
 > *"El Aggregate Root `Prestamo` protege las siguientes reglas del negocio:*
-> 1. **Checklist obligatorio de salida:** Un préstamo no puede transicionar a estado `ACTIVO` si no cuenta con un `Checklist` de salida completado y firmado por el operador de almacén.
-> 2. **Restricción de Renovación (`renovar`):** Un préstamo solo puede renovarse si se encuentra en estado `ACTIVO` (no en mora) y si ningún otro usuario tiene una reserva agendada sobre ese mismo recurso para las siguientes horas.
-> 3. **Detección de Daños e Infracciones:** Al ejecutarse el método `devolver()`, el dominio compara el checklist de entrada contra el checklist inicial de salida. Si se detectan anomalías físicas o si la fecha actual sobrepasa `fecha_fin`, el caso de uso notifica de inmediato al contexto de Identidad para la penalización correspondiente.*"
+> 1. **Entrega solo con checklist y garantía:** Un préstamo no pasa a `ENTREGADO` si no existe un `Checklist` `ESTADO_INICIAL` confirmado y una `Garantia` `REGISTRADA` con un compromiso válido (contenido, firma y testigo). Solo un préstamo `ACTIVO` puede entregarse o cancelarse en ventanilla.
+> 2. **Restricción de Renovación (`renovar`):** Solo es apto un préstamo `ACTIVO` o `ENTREGADO`, con días > 0 y antes de `fecha_fin`; extiende 7 días. No comprueba reservas de otros usuarios, y el botón «+7 días» se retiró de la interfaz (Spec 006); el método y el endpoint se mantienen.
+> 3. **Retrasos y daños al devolver:** `devolver()` calcula los días de retraso (fechas calendario en UTC) y el servicio registra el checklist de retorno; el gestor indica si hay daños. Con daños: `DANO_PARCIAL` (−30 pts) y el recurso pasa a `MANTENIMIENTO`; con retraso: `TARDANZA` (−10 pts; con 1 día solo puntos, desde 2 días bloqueo 1:1); puntual y sin daños: +10 pts.*"
 
 ---
 
@@ -56,9 +57,15 @@
 > *"Nos conectamos mediante **bajo acoplamiento (Loose Coupling)** utilizando identificadores primitivos:*
 > - ***Préstamos no importa modelos ni entidades ajenas:** En mi código está prohibido importar `UsuarioModel` o `RecursoModel`. Solo manipulo IDs primitivos (`UUID`).*
 > - ***Orquestación en ventanilla (Capa de Aplicación):***
->   1. **Con Reservas:** Cuando el usuario llega al almacén, mi servicio de entrega recibe el `reserva_id`, comprueba que esté confirmada y solicita al módulo de Reservas marcarla como `CONVERTIDA`.
->   2. **Con Catálogo:** Una vez entregado el equipo, le solicito a Catálogo actualizar el recurso a `EN_USO`. Al devolverlo, si el checklist está conforme, le solicito marcarlo `DISPONIBLE`; si llegó averiado, le pido marcarlo `EN_MANTENIMIENTO`.
->   3. **Con Identidad:** Verifico la elegibilidad del usuario antes de la entrega. Al cerrar el préstamo, si la entrega fue puntual y en perfecto estado, invoco a Identidad para **sumar puntos de reputación** (`POST /reputacion/devoluciones-exitosas`); si hubo retraso o daño, invoco el registro de **sanción** (`POST /reputacion/sanciones`).*"
+>   1. **Con Reservas:** Es Reservas quien me invoca: cuando gestión inicia el préstamo, `ReservaService.convertir_a_prestamo` llama a `PrestamoService.solicitar_prestamo` y luego marca su reserva `CONVERTIDA`. Yo solo guardo el `reserva_id`.
+>   2. **Con Catálogo:** Al crear el préstamo verifico que el recurso exista y esté `DISPONIBLE`, y lo paso a `EN_USO`. Al devolver sin daños (o al cancelar un préstamo `ACTIVO`) lo libero a `DISPONIBLE`; si llegó averiado, lo paso a `MANTENIMIENTO`. Lo hago con `RecursoRepository.actualizar_estado`, que es una dependencia de código hacia `catalogo`.
+>   3. **Con Identidad:** La elegibilidad del usuario se verifica antes de iniciar el préstamo (en `ReservaService`). Yo llamo a `ReputacionService`: `premiar_entrega_puntual` (+10) al entregar a tiempo, y al devolver `premiar_devolucion_puntual` (+10) o `aplicar_sancion` (`TARDANZA` / `DANO_PARCIAL`).*"
+
+---
+
+### Pregunta 5: ¿Cómo es el flujo de ventanilla actual (Spec 006)?
+**Respuesta exacta:**
+> *"Gestión inicia el préstamo desde una reserva `CONFIRMADA` y nace `ACTIVO`, con el recurso `EN_USO`. En `ACTIVO` solo hay dos acciones: **Realizar entrega** (garantía + checklist de salida con fotos → `ENTREGADO`, +10 pts si recogió a tiempo) o **Cancelar** (→ `CANCELADO`, recurso a `DISPONIBLE`, sin sanción). En `ENTREGADO` o `VENCIDO` solo está **Registrar devolución** (checklist de retorno, retraso y daños → `DEVUELTO`). Cancelar un préstamo ya entregado se rechaza con 409."*
 
 ---
 
@@ -74,7 +81,9 @@
 > *La diferencia conceptual y técnica es:*
 > 1. ***Reserva = Planificación / Intención futura:*** *La reserva modela una ventana estimada (ej. el usuario reservó el proyector de 10:00 AM a 12:00 PM).*
 > 2. ***Préstamo = Realidad física efectiva:*** *El préstamo modela el momento exacto en que el recurso sale físicamente del almacén. El usuario pudo haber llegado a las 10:18 AM (esa es su `fecha_inicio` real) y se le pudo haber otorgado una prórroga autorizada hasta la 1:00 PM (su `fecha_fin` pactada de devolución).*
-> 3. ***Autonomía del ciclo de vida:*** *Si el usuario nunca se presenta en la ventanilla, la reserva pasa a estado `VENCIDA` y el préstamo **jamás llega a existir**. Si hubiéramos reutilizado los mismos campos o la misma entidad, habríamos acoplado la intención teórica con la posesión física real, generando inconsistencias y perdiendo la auditoría del horario real de entrega y devolución."*
+> 3. ***Autonomía del ciclo de vida:*** *Mientras gestión no inicie el préstamo, este **no existe**: la reserva puede cancelarse sin dejar rastros en `prestamos`. Si hubiéramos reutilizado la misma entidad, habríamos acoplado la intención teórica con la posesión física real.*
+>
+> *Para ser precisos: al crear el préstamo copiamos `fecha_inicio` y `fecha_fin` de la reserva, así que al inicio coinciden; después pueden diverger (por ejemplo, `renovar()` extiende `fecha_fin` del préstamo sin tocar la reserva). La entrega real queda reflejada en el estado `ENTREGADO` y en la fecha del checklist de salida. Una mejora pendiente es guardar la fecha real de devolución."*
 
 ---
 
@@ -82,9 +91,9 @@
 
 | Compañero / Módulo | ¿Qué me pide él a mí? (Entrada) | ¿Qué le pido yo a él? (Salida) |
 |---|---|---|
-| **Persona 1 (Identidad)** | Identidad no me pide préstamos. | 1. Consulto si el `usuario_id` sigue siendo elegible en ventanilla.<br>2. Al devolver a tiempo: solicito **sumar reputación** (`POST /reputacion/devoluciones-exitosas`).<br>3. Al devolver tarde o con daños: solicito **aplicar sanción** (`POST /reputacion/sanciones`). |
-| **Persona 2 (Catálogo)** | Catálogo no me pide préstamos. | 1. Al entregar el bien físico: solicito cambiar el estado del `recurso_id` a `EN_USO`.<br>2. Al recibir el bien en buen estado: solicito cambiar su estado a `DISPONIBLE`.<br>3. Al recibir el bien dañado: solicito cambiar su estado a `EN_MANTENIMIENTO` o `FUERA_DE_SERVICIO`. |
-| **Persona 3 (Reservas)** | Reservas no me pide préstamos. | 1. Le envío el `reserva_id` para validar que la reserva esté en estado `CONFIRMADA` y vigente.<br>2. Al entregar el bien, le solicito cambiar el estado de la reserva a `CONVERTIDA`. |
+| **Persona 1 (Identidad)** | Identidad no me pide préstamos. | 1. Al entregar a tiempo o devolver a tiempo sin daños: `premiar_entrega_puntual` / `premiar_devolucion_puntual` (+10 pts).<br>2. Al devolver tarde o con daños: `aplicar_sancion` (`TARDANZA` −10, `DANO_PARCIAL` −30).<br>3. Identidad me pide `contar_prestamos_en_curso` para el cupo de operaciones y la eliminación segura de usuarios. |
+| **Persona 2 (Catálogo)** | Catálogo no me pide préstamos. | 1. Al crear el préstamo: verifico `DISPONIBLE` y lo paso a `EN_USO`.<br>2. Al devolver sin daños o cancelar un préstamo `ACTIVO`: `DISPONIBLE`.<br>3. Al devolver con daños: `MANTENIMIENTO`.<br>4. Futuro: leer de Catálogo los criterios de inspección del checklist. |
+| **Persona 3 (Reservas)** | Reservas me invoca para crear el préstamo (`solicitar_prestamo`). | Nada directo: Reservas me invoca (`solicitar_prestamo`) y es ella quien marca la reserva `CONVERTIDA`. Identidad/Reservas me piden `contar_prestamos_en_curso`. |
 
 ---
 
