@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -21,9 +22,16 @@ from prestamos_recursos.contexts.reservas.domain.services.algoritmo_prioridad_se
 )
 
 if TYPE_CHECKING:
+    from prestamos_recursos.contexts.catalogo.application.services import (
+        RecursoApplicationService,
+    )
     from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
         ReputacionService,
     )
+
+TOLERANCIA_RELOJ_PASADO = timedelta(minutes=5)
+ANTICIPACION_MAXIMA_RESERVA = timedelta(days=30)
+VENTANA_ANTICIPACION_PRESTAMO = timedelta(hours=1)
 
 
 class ReservaService:
@@ -34,11 +42,13 @@ class ReservaService:
         reserva_repository: ReservaRepository,
         prestamo_service: PrestamoService,
         reputacion_service: ReputacionService | None = None,
+        catalogo_service: RecursoApplicationService | None = None,
     ) -> None:
         self._reserva_repository = reserva_repository
         self._prioridad_service = AlgoritmoPrioridadService()
         self._prestamo_service = prestamo_service
         self._reputacion_service = reputacion_service
+        self._catalogo_service = catalogo_service
 
     def _obtener_puntaje_usuario(self, usuario_id: UUID) -> int:
         if self._reputacion_service is None:
@@ -149,8 +159,39 @@ class ReservaService:
                 f"permitido para tu nivel de reputación ({nivel.value})"
             )
 
-    def crear_reserva(self, datos: CrearReservaDTO) -> ReservaDTO:
+    def _verificar_recurso_operativo(self, recurso_id: UUID) -> None:
+        """RF-03: rechaza reservas de recursos en mantenimiento o fuera de servicio."""
+        if self._catalogo_service is not None and hasattr(self._catalogo_service, "obtener_por_id"):
+            recurso = self._catalogo_service.obtener_por_id(recurso_id)
+            if recurso is not None:
+                estado = (
+                    recurso.estado.value
+                    if hasattr(recurso.estado, "value")
+                    else str(recurso.estado)
+                )
+                if estado in {"MANTENIMIENTO", "FUERA_DE_SERVICIO"}:
+                    raise ValueError(
+                        "el recurso no admite reservas por encontrarse en mantenimiento o fuera de servicio"
+                    )
+
+    def _validar_ventana_temporal_creacion(
+        self, fecha_inicio: datetime, ahora: datetime | None = None
+    ) -> None:
+        """RF-02: rechaza reservas en el pasado (tolerancia 5m) o con anticipación > 30 días."""
+        instante_actual = Reserva._a_utc(ahora) if ahora is not None else datetime.now(UTC)
+        inicio_utc = Reserva._a_utc(fecha_inicio)
+        if inicio_utc < instante_actual - TOLERANCIA_RELOJ_PASADO:
+            raise ValueError("no se pueden crear reservas en el pasado")
+        if inicio_utc > instante_actual + ANTICIPACION_MAXIMA_RESERVA:
+            raise ValueError("solo se puede reservar con un máximo de 30 días de anticipación")
+
+    def crear_reserva(
+        self, datos: CrearReservaDTO, ahora: datetime | None = None
+    ) -> ReservaDTO:
+        instante_actual = Reserva._a_utc(ahora) if ahora is not None else datetime.now(UTC)
         self._verificar_elegibilidad_usuario(datos.usuario_id)
+        self._verificar_recurso_operativo(datos.recurso_id)
+        self._validar_ventana_temporal_creacion(datos.fecha_inicio, ahora)
         reserva = Reserva.crear(**datos.model_dump())
         reservas_activas = self._reserva_repository.obtener_activas_por_recurso(
             reserva.recurso_id
@@ -170,7 +211,7 @@ class ReservaService:
             self._reserva_repository.guardar(reserva)
             return ReservaDTO.model_validate(reserva)
 
-        reserva.confirmar()
+        reserva.confirmar(fecha_actual=instante_actual)
         self._reserva_repository.guardar(reserva)
         return ReservaDTO.model_validate(reserva)
 
@@ -241,12 +282,20 @@ class ReservaService:
 
         return True
 
-    def convertir_a_prestamo(self, id_reserva: UUID) -> bool:
+    def convertir_a_prestamo(self, id_reserva: UUID, ahora: datetime | None = None) -> bool:
         reserva = self._reserva_repository.obtener_por_id(id_reserva)
         if reserva is None or reserva.estado != EstadoReserva.CONFIRMADA:
             return False
 
         self._verificar_elegibilidad_usuario(reserva.usuario_id)
+
+        instante_actual = Reserva._a_utc(ahora) if ahora is not None else datetime.now(UTC)
+        inicio_utc = Reserva._a_utc(reserva.fecha_inicio)
+        fin_utc = Reserva._a_utc(reserva.fecha_fin)
+        if not (inicio_utc - VENTANA_ANTICIPACION_PRESTAMO <= instante_actual <= fin_utc):
+            raise ValueError(
+                "el préstamo solo puede iniciarse desde 1 hora antes del horario reservado y hasta antes de su vencimiento"
+            )
 
         creado = self._prestamo_service.solicitar_prestamo(
             id_reserva=reserva.id,

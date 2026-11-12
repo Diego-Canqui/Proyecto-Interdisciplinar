@@ -372,6 +372,31 @@ class TestReputacionExcepciones:
 
         assert response.status_code == 404
 
+    def test_post_reputacion_excepciones_fecha_fin_anterior_422(self) -> None:
+        """RF-06: registrar una excepción con fecha_fin < fecha_inicio retorna 422."""
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        datos_victima = _crear_usuario_ejemplo()
+        datos_victima["correo"] = "victima_fecha_fin@example.com"
+        _, victima = _registrar_y_login(datos_victima)
+
+        ahora = datetime.now(UTC)
+        body = {
+            "usuario_id": victima["id"],
+            "motivo": "Fecha fin anterior a fecha inicio",
+            "fecha_inicio": ahora.isoformat(),
+            "fecha_fin": (ahora - timedelta(days=1)).isoformat(),
+        }
+        response = client.post(
+            "/reputacion/excepciones",
+            json=body,
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+
+        assert response.status_code == 422
+        assert "La fecha de fin de la excepción académica no puede ser anterior a la fecha de inicio" in response.text
+
 
 @pytest.mark.e2e
 class TestReputacionElegibilidad:

@@ -3,6 +3,9 @@
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from prestamos_recursos.contexts.catalogo.application.services import (
+    RecursoApplicationService,
+)
 from prestamos_recursos.contexts.catalogo.infrastructure.repositories import (
     SqlRecursoRepository,
 )
@@ -35,17 +38,20 @@ from prestamos_recursos.contexts.prestamos.infrastructure.repositories.sql_prest
 from prestamos_recursos.shared.database import get_session
 
 
-def get_prestamo_service(session: Session = Depends(get_session)) -> PrestamoService:
+def get_prestamo_service(
+    session: Session = Depends(get_session),  # noqa: B008
+) -> PrestamoService:
     """Factory para inyectar `PrestamoService` con sus dependencias reales."""
     reputacion_service = ReputacionService(
         perfil_reputacion_repository=SqlPerfilReputacionRepository(session),
         excepcion_academica_repository=SqlExcepcionAcademicaRepository(session),
         usuario_repository=SqlUsuarioRepository(session),
     )
+    catalogo_service = RecursoApplicationService(SqlRecursoRepository(session))
     return PrestamoService(
         prestamo_repository=SqlPrestamoRepository(session),
         checklist_repository=SqlChecklistRepository(session),
         garantia_repository=SqlGarantiaRepository(session),
         reputacion_service=reputacion_service,
-        recurso_repository=SqlRecursoRepository(session),
+        catalogo_service=catalogo_service,
     )

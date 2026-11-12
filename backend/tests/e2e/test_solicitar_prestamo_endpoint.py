@@ -228,8 +228,13 @@ def test_flujo_e2e_reserva_espera_y_promocion():
 	u1 = crear_usuario(u1_id, RolUsuario.ESTUDIANTE)
 	u2 = crear_usuario(u2_id, RolUsuario.ESTUDIANTE)
 
-	inicio = (datetime.now(UTC) + timedelta(hours=5)).isoformat()
-	fin = (datetime.now(UTC) + timedelta(hours=7)).isoformat()
+	candidato = (datetime.now(UTC) + timedelta(days=1)).replace(
+		hour=10, minute=0, second=0, microsecond=0
+	)
+	while candidato.weekday() >= 5:
+		candidato += timedelta(days=1)
+	inicio = candidato.isoformat()
+	fin = (candidato + timedelta(hours=2)).isoformat()
 
 	# 1. Usuario 1 reserva en horario libre -> 201 CONFIRMADA
 	app.dependency_overrides[get_current_user] = lambda: u1
@@ -281,8 +286,13 @@ def test_flujo_e2e_reserva_espera_y_promocion():
 def test_solicitar_reserva_rechaza_roles_gestion_con_403():
 	gestor_id = uuid4()
 	app.dependency_overrides[get_current_user] = lambda: crear_usuario(gestor_id, RolUsuario.GESTOR_ALMACEN)
-	inicio = (datetime.now(UTC) + timedelta(hours=5)).isoformat()
-	fin = (datetime.now(UTC) + timedelta(hours=7)).isoformat()
+	candidato = (datetime.now(UTC) + timedelta(days=1)).replace(
+		hour=10, minute=0, second=0, microsecond=0
+	)
+	while candidato.weekday() >= 5:
+		candidato += timedelta(days=1)
+	inicio = candidato.isoformat()
+	fin = (candidato + timedelta(hours=2)).isoformat()
 	datos_gestor = {
 		"usuario_id": str(gestor_id),
 		"recurso_id": str(uuid4()),
@@ -314,7 +324,12 @@ def test_solicitar_reserva_rechaza_roles_gestion_con_403():
 def test_solicitar_reserva_duracion_mayor_a_7_dias_retorna_409():
 	u_id = uuid4()
 	app.dependency_overrides[get_current_user] = lambda: crear_usuario(u_id, RolUsuario.ESTUDIANTE)
-	inicio = datetime.now(UTC) + timedelta(hours=2)
+	candidato = (datetime.now(UTC) + timedelta(days=1)).replace(
+		hour=10, minute=0, second=0, microsecond=0
+	)
+	while candidato.weekday() >= 5:
+		candidato += timedelta(days=1)
+	inicio = candidato
 	datos = {
 		"usuario_id": str(u_id),
 		"recurso_id": str(uuid4()),

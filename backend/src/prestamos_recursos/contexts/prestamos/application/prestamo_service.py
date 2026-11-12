@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
-from prestamos_recursos.contexts.catalogo.domain.repositories.recurso_repository import (
-    RecursoRepository,
-)
+
+if TYPE_CHECKING:
+    from prestamos_recursos.contexts.catalogo.application.services import (
+        RecursoApplicationService,
+    )
 from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_service import (
     ReputacionService,
 )
@@ -42,13 +45,14 @@ class PrestamoService:
         checklist_repository: ChecklistRepository,
         garantia_repository: GarantiaRepository,
         reputacion_service: ReputacionService | None = None,
-        recurso_repository: RecursoRepository | None = None,
+        catalogo_service: RecursoApplicationService | None = None,
+        recurso_repository: Any | None = None,
     ) -> None:
         self._prestamo_repository = prestamo_repository
         self._checklist_repository = checklist_repository
         self._garantia_repository = garantia_repository
         self._reputacion_service = reputacion_service
-        self._recurso_repository = recurso_repository
+        self._recurso_repository = catalogo_service or recurso_repository
 
     def solicitar_prestamo(
         self,
@@ -250,6 +254,7 @@ class PrestamoService:
                     "tipo": garantia.tipo.value,
                     "estado": garantia.estado.value,
                     "fecha_registro": garantia.fecha_registro,
+                    "fecha_liberacion": garantia.fecha_liberacion,
                     "testigo": garantia.compromiso.testigo,
                 }
                 if garantia
@@ -291,6 +296,22 @@ class PrestamoService:
                 completo=True,
             )
             self._checklist_repository.guardar(checklist_retorno)
+
+        # Liberar o retener garantía asociada si existe (RF-05)
+        if self._garantia_repository is not None and hasattr(
+            self._garantia_repository, "obtener_por_prestamo"
+        ):
+            garantia = self._garantia_repository.obtener_por_prestamo(id_prestamo)
+            if garantia is not None and garantia.estado in {
+                EstadoGarantia.REGISTRADA,
+                EstadoGarantia.PENDIENTE,
+            }:
+                if danos_detectados:
+                    garantia.retener()
+                else:
+                    garantia.liberar(datetime.now(UTC))
+                if hasattr(self._garantia_repository, "guardar"):
+                    self._garantia_repository.guardar(garantia)
 
         # Liberar recurso (si hay daños, ponerlo en mantenimiento para revisión)
         if self._recurso_repository is not None:

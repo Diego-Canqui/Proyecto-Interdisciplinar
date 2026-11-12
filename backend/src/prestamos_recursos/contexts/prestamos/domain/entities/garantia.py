@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_garantia import EstadoGarantia
@@ -30,8 +30,16 @@ class Garantia(BaseEntity):
             raise ValueError("El compromiso de responsabilidad no es válido")
         self.estado = EstadoGarantia.REGISTRADA
 
-    def liberar(self) -> None:
-        raise NotImplementedError
+    def liberar(self, fecha_liberacion: datetime | None = None) -> None:
+        """Libera la garantía tras devolución conforme (RF-05)."""
+        if self.estado not in {EstadoGarantia.REGISTRADA, EstadoGarantia.PENDIENTE}:
+            raise ValueError("Sólo se puede liberar una garantía registrada o pendiente")
+        self.estado = EstadoGarantia.LIBERADA
+        self.fecha_liberacion = fecha_liberacion or datetime.now(UTC)
 
     def retener(self) -> None:
-        raise NotImplementedError
+        """Retiene la garantía ante daños detectados en la devolución (RF-05)."""
+        if self.estado not in {EstadoGarantia.REGISTRADA, EstadoGarantia.PENDIENTE}:
+            raise ValueError("Sólo se puede retener una garantía registrada o pendiente")
+        self.estado = EstadoGarantia.RETENIDA
+        self.fecha_liberacion = None
