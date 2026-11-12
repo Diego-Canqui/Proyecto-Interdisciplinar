@@ -10,7 +10,8 @@
 ## 1. Qué se implementó en este contexto
 
 1. **Solicitud de Reservas con Autoconfirmación o Encolamiento (`crear_reserva`):**
-   - Validación de rango horario (`fecha_fin > fecha_inicio`), normalización a UTC y verificación de duración máxima de **7 días** (`DURACION_MAXIMA_RESERVA = timedelta(days=7)`, Spec 006).
+   - Validación de políticas temporales e institucionales (Spec 007): horario de atención de **lunes a viernes de 08:00 a 20:00 UTC** inclusive tanto para inicio como para fin, duración mínima de **1 hora** y máxima de **7 días**, prohibición de fechas en el pasado (con tolerancia de 5 minutos) y anticipación máxima de **30 días**.
+   - Verificación del estado operativo del recurso vía `RecursoApplicationService`: se admiten recursos en `DISPONIBLE` y `EN_USO`; se rechazan recursos en `MANTENIMIENTO` o `FUERA_DE_SERVICIO` con `409 Conflict`.
    - Si el horario solicitado para ese recurso no choca con ninguna reserva `CONFIRMADA`, la reserva se confirma automáticamente en el acto (`CONFIRMADA`).
    - Si otro usuario ya tiene una reserva `CONFIRMADA` que se cruza en ese horario, la solicitud no se pierde: se registra en la **Lista de Espera** en estado `PENDIENTE`.
 
@@ -26,11 +27,16 @@
 
 ## 2. Políticas y Reglas de Negocio del Módulo
 
-### Política 1: Validación de Horarios, Duración Máxima y Prohibición de Duplicados
-- Toda reserva exige `fecha_fin > fecha_inicio` (de lo contrario lanza `ValueError("fecha_fin debe ser posterior a fecha_inicio")`).
-- **Duración máxima de 7 días (Spec 006):** En `Reserva.crear()` se valida que `fecha_fin - fecha_inicio <= timedelta(days=7)` (168 horas). Si la duración solicitada supera los 7 días, se rechaza con `409 Conflict` (`ValueError("la duración máxima de una reserva es de 7 días")`).
-- Dos reservas se superponen cuando `inicio_A < fin_B` y `inicio_B < fin_A` (`se_superpone_con`). Los horarios consecutivos exactos (donde una termina a las 12:00 y otra empieza a las 12:00) son válidos y no chocan.
-- Un mismo usuario **no puede** crear dos reservas activas que se superpongan para el mismo recurso (responde `409 Conflict`: *"ya tienes una reserva activa para este recurso en ese horario"*).
+### Política 1: Reglas Temporales y Horario de Atención Institucional (Spec 007)
+- **Horario de atención institucional:** Las fechas y horas de entrega (`fecha_inicio`) y devolución (`fecha_fin`) deben ubicarse estrictamente de **lunes a viernes entre las 08:00 y las 20:00 UTC** inclusive (`Reserva._validar_horario_atencion`). Se rechaza cualquier solicitud en fin de semana (sábado/domingo) o fuera del horario de ventanilla con `409 Conflict`. Se permiten reservas multidía (p. ej. de viernes 15:00 a lunes 15:00) siempre que ambos extremos caigan dentro del horario hábil.
+- **Duración de la reserva:**
+  - Duración mínima de **1 hora** (`duracion >= timedelta(hours=1)`).
+  - Duración máxima de **7 días** (`duracion <= timedelta(days=7)`).
+  - Toda reserva exige `fecha_fin > fecha_inicio`.
+- **Ventana temporal de anticipación y no pasado:**
+  - Prohibido reservar en el pasado respecto al instante actual, permitiendo una tolerancia de **5 minutos** para compensar desfases de reloj entre cliente y servidor.
+  - Anticipación máxima permitida: **30 días** respecto a `fecha_inicio`.
+- **Superposición y unicidad:** Dos reservas se superponen cuando `inicio_A < fin_B` y `inicio_B < fin_A` (`se_superpone_con`). Un mismo usuario no puede tener dos reservas activas superpuestas para el mismo recurso (`409 Conflict`).
 
 ### Política 2: Autoconfirmación vs. Lista de Espera (`PENDIENTE`)
 - **Horario libre:** Si ninguna reserva `CONFIRMADA` se superpone con el horario pedido, la reserva pasa a `EstadoReserva.CONFIRMADA` inmediatamente al crearse (`201 Created`).
@@ -61,28 +67,41 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
    - Si `total_en_curso >= nivel.limite_operaciones` (`BAJO`: 1, `NORMAL`: 2, `BUENO`: 3, `EXCELENTE`: 5), la solicitud se rechaza con `409 Conflict` informando el límite del nivel.
 
 
+### Política 6: Ventana de Conversión a Préstamo y Estado Operativo del Recurso (Spec 007)
+1. **Estado operativo del recurso:**
+   - Al procesar `crear_reserva`, `ReservaService` valida el estado del recurso mediante `RecursoApplicationService`.
+   - Se admiten recursos en estado `DISPONIBLE` y `EN_USO` (para fechas futuras o lista de espera).
+   - Se rechazan reservas para recursos en `MANTENIMIENTO` o `FUERA_DE_SERVICIO` con `409 Conflict` (`"el recurso no admite reservas por encontrarse en mantenimiento o fuera de servicio"`).
+2. **Ventana temporal de conversión a préstamo:**
+   - La conversión a préstamo en ventanilla (`convertir_a_prestamo`) exige que el instante actual se encuentre dentro del intervalo:
+     `fecha_inicio - 1 hora <= ahora <= fecha_fin`
+   - Si se intenta iniciar el préstamo antes de 1 hora del inicio pactado o después de que la reserva haya vencido, se rechaza con `409 Conflict`.
+
 ---
 
 ## 3. Guía de Código que debes dominar para la exposición
 
 ### Capa de Dominio (`contexts/reservas/domain/`)
 - **`entities/reserva.py` (`Reserva`)**:
-  - `Reserva.crear(...)`: Método de fábrica que valida `fecha_fin > fecha_inicio` e inicializa el estado en `PENDIENTE`.
-  - `confirmar()`: Verifica que esté `PENDIENTE` y vigente (`esta_vigente()`), y cambia el estado a `CONFIRMADA`.
+  - `Reserva.crear(...)`: Valida horario hábil institucional (Lunes a Viernes 08:00 a 20:00 UTC), duración mínima (1h) y máxima (7d), e inicializa el estado en `PENDIENTE`.
+  - `confirmar(fecha_actual)`: Verifica que esté `PENDIENTE` y vigente en el instante evaluado (`esta_vigente(fecha_actual)`), y pasa a `CONFIRMADA`.
   - `cancelar()`: Impide cancelar una reserva ya cancelada y pasa el estado a `CANCELADA`.
+  - `esta_vigente(fecha_actual)`: Comprueba si `fecha_fin > ahora` y el estado está activo.
   - `se_superpone_con(otra: Reserva) -> bool`: Compara en UTC si dos intervalos `[fecha_inicio, fecha_fin)` se solapan.
 - **`services/algoritmo_prioridad_service.py` (`AlgoritmoPrioridadService`)**:
   - `ordenar_cola_espera(reservas, puntajes_reputacion=None)`: Ordena por `(-puntajes.get(r.usuario_id, 500), r.fecha_inicio)`.
 
 ### Capa de Aplicación (`contexts/reservas/application/`)
 - **`reserva_service.py` (`ReservaService`)**:
-  - `crear_reserva(datos)`: Evalúa superposición con reservas del mismo usuario (error) y con reservas confirmadas de otros usuarios (cola `PENDIENTE` o autoconfirmación).
-  - `cancelar_reserva(id_reserva)`: Cancela la reserva y, si estaba `CONFIRMADA`, consulta los puntajes en `ReputacionService`, ordena la cola con `AlgoritmoPrioridadService` y confirma la candidata ganadora.
-  - `obtener_cola_espera(id_recurso)`: Devuelve la cola de espera ya ordenada por reputación.
-  - `convertir_a_prestamo(id_reserva)`: Verifica que la reserva esté `CONFIRMADA` y delega en `PrestamoService.crear_desde_reserva(...)`.
+  - Desacople DDD mediante `RecursoApplicationService` inyectado como `catalogo_service`.
+  - `crear_reserva(datos, ahora=None)`: Valida estado del recurso, ventana de creación (no pasado con 5 min de tolerancia, máx. 30 días de anticipación), superposición con el mismo usuario y confirma o encola en `PENDIENTE`.
+  - `cancelar_reserva(id_reserva)`: Cancela la reserva y promueve automáticamente al mejor candidato elegible saltando sancionados.
+  - `convertir_a_prestamo(id_reserva, ahora=None)`: Valida ventana operativa `inicio - 1h <= ahora <= fin` y delega en `PrestamoService`.
 
 ### Capa de Presentación y Frontend
 - **`presentation/reserva_controller.py`**:
   - Endpoints `/reservas`, `/reservas/usuario/{id_usuario}`, `/reservas/recurso/{id_recurso}/cola`, `PATCH /reservas/{id}/confirmar`, `POST /reservas/{id}/prestamo` y `PATCH /reservas/{id}/cancelar`.
 - **`frontend/src/features/reservas/pages/MisReservasPage.jsx`**:
-  - Formulario de solicitud (que lee `?recursoId=` si el usuario vino desde el catálogo), alerta informativa cuando una reserva queda en cola de espera por reputación, y tabla de acciones diferenciada por rol (`esGestion`).
+  - Función `formatearFechaNominalUTC` para neutralizar desfases de zona horaria del navegador.
+  - Opciones de recursos no operativos deshabilitadas en el selector (`— (No disponible para reservas)`).
+  - Validaciones locales antes de envío (duración 1h a 7d, L–V 08:00 a 20:00) y texto informativo de políticas operativas.

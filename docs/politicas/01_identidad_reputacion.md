@@ -15,13 +15,13 @@
    - Rate limiting en los endpoints de autenticación para mitigar ataques de fuerza bruta.
 2. **Motor de Reputación Dinámica:**
    - Cálculo de puntaje acotado entre **0 y 1000 puntos** (`PuntajeReputacion`).
-   - Clasificación automática en 4 niveles (`NivelReputacion`): `EXCELENTE`, `NORMAL`, `RIESGO` y `BLOQUEADO`.
-   - Recompensas automáticas por recogida puntual (+10 pts) y devolución puntual (+15 pts).
+   - Clasificación automática en 4 niveles (`NivelReputacion`): `EXCELENTE`, `BUENO`, `NORMAL` y `BAJO`.
+   - Recompensas automáticas por recogida puntual (+10 pts) y devolución puntual (+10 pts).
 3. **Gestión de Sanciones con Expiración:**
-   - Aplicación de sanciones por `TARDANZA`, `DANO_PARCIAL` y `PERDIDA_TOTAL`, con cálculo automático de descuento de puntos y fecha de expiración obligatoria (`fecha_fin`).
-   - Expiración automática de sanciones vencidas y endpoint de amnistía administrativa.
+   - Aplicación de sanciones por `TARDANZA`, `DANO_PARCIAL`, `DANO_TOTAL` e `INASISTENCIA_RESERVA`, con cálculo automático de descuento de puntos y fecha de expiración obligatoria (`fecha_fin`).
+   - Expiración automática de sanciones vencidas y amnistía mensual para perfiles en nivel `BAJO`.
 4. **Excepciones Académicas:**
-   - Solicitud, aprobación y rechazo de excepciones académicas justificadas para permitir que un usuario en estado `BLOQUEADO` pueda operar temporalmente cuando un gestor o administrador lo autoriza.
+   - Registro de excepciones académicas activas (`activa = True`, sin flujo de aprobación/rechazo) con método `anular()`, validando que `fecha_fin >= fecha_inicio`. Permiten justificar sanciones de `TARDANZA` e `INASISTENCIA_RESERVA` mientras la excepción se encuentre vigente (`fecha_inicio <= ahora <= fecha_fin`).
 5. **Interfaz de usuario (`/login`, `/registro`, `/reputacion`):**
    - Pantallas de autenticación y panel de consulta/gestión de reputación, sanciones y excepciones académicas adaptado según el rol del usuario.
 
@@ -39,20 +39,21 @@
   - **`BAJO`**: 0 a 299 puntos → hasta **1** operación simultánea.
 
 ### Política 2: Recompensas por Cumplimiento
-- **Entrega / recogida puntual (`premiar_entrega_puntual`):** Suma **+10 puntos** cuando el usuario recoge el recurso en o antes de la fecha de inicio pactada.
-- **Devolución puntual (`premiar_devolucion_puntual`):** Suma **+15 puntos** cuando devuelve el recurso sin días de retraso y sin daños físicos.
+- **Entrega / recogida puntual (`premiar_entrega_puntual`):** Suma **+10 puntos** (con tope 1000) cuando el usuario recoge el recurso en o antes de la fecha de inicio pactada.
+- **Devolución puntual (`premiar_devolucion_puntual`):** Suma **+10 puntos** (con tope 1000) cuando devuelve el recurso sin días de retraso y sin daños físicos.
 
 ### Política 3: Sanciones y Expiración Temporal
-Toda sanción tiene una `fecha_fin` obligatoria (`NOT NULL`). Una sanción está vigente únicamente mientras `fecha_fin > ahora` y `activa == True`:
-- **`DEVOLUCION_TARDIA`:** Descuenta **20 puntos base + 5 puntos por cada día de retraso** (`20 + 5 * dias_retardo`). Duración: 15 días.
-- **`DANO_LEVE`:** Descuenta **50 puntos**. Duración: 7 días.
-- **`DANO_GRAVE`:** Descuenta **150 puntos**. Duración: 30 días.
-- **`DANO_TOTAL`:** Descuenta **300 puntos**. Duración: 180 días.
-- **`INASISTENCIA_RESERVA`:** Descuenta **30 puntos**. Duración: 7 días.
+Toda sanción tiene una `fecha_fin` obligatoria (`NOT NULL`) y un `monto_descuento` (registro de deuda). Una sanción está vigente únicamente mientras `fecha_fin > ahora` y `activa == True`:
+- **`TARDANZA`:** Descuenta **10 puntos**, deuda registrada **$0**. Cuenta con 1 día de gracia: si el retraso es ≤ 1 día, no genera bloqueo (`fecha_fin = fecha_aplicacion`, expira en el acto); a partir del 2º día de retraso, bloqueo 1:1 en días (`duracion_bloqueo = dias_retraso`).
+- **`DANO_PARCIAL`:** Descuenta **30 puntos**, deuda registrada **$50**, bloqueo **30 días**.
+- **`DANO_TOTAL`:** Descuenta **100 puntos**, deuda registrada igual al valor del recurso (`monto_opcional > 0`), bloqueo **60 días**.
+- **`INASISTENCIA_RESERVA`:** Descuenta **15 puntos**, deuda registrada **$0**, bloqueo fijo de **3 días**.
 
-### Política 4: Bloqueo Operativo y Excepciones Académicas
+### Política 4: Bloqueo Operativo y Excepciones Académicas (Spec 007)
 - Un usuario es elegible para operar si no cuenta con sanciones vigentes activas que bloqueen el acceso.
-- Si posee una sanción vigente, solo puede operar si cuenta con una **Excepción Académica** activa que justifique su sanción cuya vigencia cubra la fecha actual (`fecha_inicio <= ahora <= fecha_fin`).
+- Si posee sanciones vigentes de tipo `TARDANZA` o `INASISTENCIA_RESERVA`, puede operar si cuenta con una **Excepción Académica** activa cuya vigencia cubra la fecha actual (`fecha_inicio <= ahora <= fecha_fin`).
+- Toda excepción académica exige estrictamente que `fecha_fin >= fecha_inicio` (validado en `__post_init__` de la entidad y en `RegistrarExcepcionDTO`); registrar una excepción con `fecha_fin < fecha_inicio` es rechazado con error `422 Unprocessable Entity`.
+- Las excepciones académicas nacen directamente activas (`activa = True`, sin flujo de aprobación/rechazo) y pueden anularse administrativamente mediante `anular()`.
 
 ### Política 5: Administración de Usuarios, Jerarquía de Roles y Estado de Cuenta (Spec 006)
 - **Creación de usuarios (`POST /usuarios`):**
@@ -86,13 +87,13 @@ Toda sanción tiene una `fecha_fin` obligatoria (`NOT NULL`). Una sanción está
   - `aplicar_sancion(sancion)`: Registra la sanción, resta los puntos y recalcula el `NivelReputacion`.
   - `recompensar(puntos)`: Incrementa el puntaje hasta el tope de 1000 y actualiza el nivel.
   - `expirar_sanciones_vencidas(ahora)`: Desactiva las sanciones cuya `fecha_fin <= ahora`.
-  - `aplicar_amnistia()`: Desactiva todas las sanciones activas y restaura el puntaje a 500 si estaba por debajo.
+  - `aplicar_amnistia(ahora)` / `ejecutar_amnistia_mensual`: Suma **+25 puntos** (con tope 1000) a los perfiles en nivel `BAJO` (0–299 pts) que no tengan sanciones aplicadas en los últimos 30 días y recalcula su nivel.
 - **`entities/sancion.py` (`Sancion`)**:
-  - `calcular_descuento(tipo, dias_retardo)` y `calcular_fecha_fin(tipo, fecha_aplicacion)`: Contienen las fórmulas exactas de castigo y duración.
+  - `calcular_descuento(tipo, dias_retardo)` y `calcular_fecha_fin(tipo, fecha_aplicacion)`: Contienen las fórmulas exactas de castigo y duración para `TARDANZA`, `DANO_PARCIAL`, `DANO_TOTAL` e `INASISTENCIA_RESERVA`.
 - **`value_objects/puntaje_reputacion.py` (`PuntajeReputacion`)**:
   - Value Object inmutable que valida el rango `0 <= valor <= 1000`.
 - **`entities/excepcion_academica.py` (`ExcepcionAcademica`)**:
-  - `aprobar()`, `rechazar()` y `esta_vigente(ahora)`.
+  - `es_vigente(ahora)` (comprueba `activa` y `fecha_inicio <= ahora <= fecha_fin`) y `anular()`. Exige `fecha_fin >= fecha_inicio`.
 
 ### Capa de Aplicación (`contexts/identidad_reputacion/application/`)
 - **`reputacion_service.py` (`ReputacionService`)**:
@@ -115,5 +116,5 @@ Toda sanción tiene una `fecha_fin` obligatoria (`NOT NULL`). Una sanción está
 - **`presentation/usuario_controller.py`**: Endpoints bajo `/usuarios` (`POST`, `GET`, `PATCH /{id}/rol`, `PATCH /{id}/estado`, `DELETE /{id}`).
 - **`presentation/reputacion_controller.py` y `autenticacion_controller.py`**: Endpoints REST bajo `/reputacion` y `/auth`.
 - **`frontend/src/features/identidad/pages/UsuariosPage.jsx`**: Pantalla de administración de usuarios con selector jerárquico de roles en el alta, cambio de rol inline, conmutador de estado activo/inactivo y eliminación con confirmación en dos pasos.
-- **`frontend/src/features/identidad/pages/GestionReputacionPage.jsx`**: Vista de gestión donde el gestor o administrador aplica sanciones, aprueba/anula excepciones académicas o ejecuta amnistías.
+- **`frontend/src/features/identidad/pages/GestionReputacionPage.jsx`**: Vista de gestión donde el gestor o administrador aplica sanciones (`TARDANZA`, `INASISTENCIA_RESERVA`, `DANO_PARCIAL`, `DANO_TOTAL`), registra o anula excepciones académicas y ejecuta amnistías mensuales.
 
