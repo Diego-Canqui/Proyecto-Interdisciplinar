@@ -28,6 +28,8 @@ class SqlPrestamoRepository(PrestamoRepository):
             fecha_inicio=modelo.fecha_inicio,
             fecha_fin=modelo.fecha_fin,
             estado=EstadoPrestamo(modelo.estado),
+            fecha_entrega_real=modelo.fecha_entrega_real,
+            fecha_devolucion_real=modelo.fecha_devolucion_real,
         )
 
     def guardar(self, prestamo: Prestamo) -> None:
@@ -42,6 +44,8 @@ class SqlPrestamoRepository(PrestamoRepository):
         modelo.fecha_inicio = prestamo.fecha_inicio
         modelo.fecha_fin = prestamo.fecha_fin
         modelo.estado = prestamo.estado
+        modelo.fecha_entrega_real = prestamo.fecha_entrega_real
+        modelo.fecha_devolucion_real = prestamo.fecha_devolucion_real
         self._session.flush()
 
     def obtener_por_id(self, id: UUID) -> Prestamo | None:

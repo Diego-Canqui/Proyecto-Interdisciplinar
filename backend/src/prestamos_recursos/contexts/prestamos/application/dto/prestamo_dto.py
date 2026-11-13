@@ -19,6 +19,8 @@ class PrestamoDTO(BaseModel):
     fecha_inicio: datetime
     fecha_fin: datetime
     estado: EstadoPrestamo
+    fecha_entrega_real: datetime | None = None
+    fecha_devolucion_real: datetime | None = None
 
     @classmethod
     def from_entity(cls, prestamo: Prestamo) -> PrestamoDTO:
@@ -31,6 +33,8 @@ class PrestamoDTO(BaseModel):
             fecha_inicio=prestamo.fecha_inicio,
             fecha_fin=prestamo.fecha_fin,
             estado=prestamo.estado,
+            fecha_entrega_real=prestamo.fecha_entrega_real,
+            fecha_devolucion_real=prestamo.fecha_devolucion_real,
         )
 
     model_config = {"from_attributes": True}

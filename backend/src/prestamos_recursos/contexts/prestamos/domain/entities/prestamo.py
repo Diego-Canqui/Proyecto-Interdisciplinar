@@ -25,6 +25,8 @@ class Prestamo(BaseEntity):
     fecha_inicio: datetime
     fecha_fin: datetime
     estado: EstadoPrestamo
+    fecha_entrega_real: datetime | None = None
+    fecha_devolucion_real: datetime | None = None
 
     def __post_init__(self) -> None:
         inicio = _ensure_utc(self.fecha_inicio)
@@ -38,11 +40,14 @@ class Prestamo(BaseEntity):
             raise ValueError(f"No se puede iniciar un préstamo en estado {self.estado.value}")
         self.estado = EstadoPrestamo.ACTIVO
 
-    def marcar_entregado(self) -> None:
+    def marcar_entregado(self, fecha_entrega: datetime | None = None) -> None:
         """Marca el préstamo como entregado al usuario tras confirmar la inspección."""
         if self.estado != EstadoPrestamo.ACTIVO:
             raise ValueError("Sólo pueden marcarse como entregados préstamos activos")
         self.estado = EstadoPrestamo.ENTREGADO
+        self.fecha_entrega_real = (
+            _ensure_utc(fecha_entrega) if fecha_entrega is not None else datetime.now(UTC)
+        )
 
     def calcular_dias_retraso(self, fecha_referencia: datetime | None = None) -> int:
         """Calcula cuántos días de retraso hay respecto a fecha_fin."""
@@ -65,6 +70,7 @@ class Prestamo(BaseEntity):
         fecha = _ensure_utc(fecha_devolucion) if fecha_devolucion is not None else datetime.now(UTC)
         dias_retraso = self.calcular_dias_retraso(fecha)
         self.estado = EstadoPrestamo.DEVUELTO
+        self.fecha_devolucion_real = fecha
         return dias_retraso
 
     def vencer(self, fecha_actual: datetime | None = None) -> None:

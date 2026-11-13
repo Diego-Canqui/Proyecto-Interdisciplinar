@@ -102,6 +102,9 @@ def test_consultar_historial_usuario_sin_prestamos():
         garantia_repository=SimpleNamespace(),
     )
     app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        usuario_id, [RolUsuario.ESTUDIANTE]
+    )
 
     response = client.get(f"/prestamos/usuarios/{usuario_id}/historial")
     assert response.status_code == 200
@@ -125,6 +128,9 @@ def test_consultar_historial_con_prestamos():
         garantia_repository=SimpleNamespace(),
     )
     app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        usuario_id, [RolUsuario.ESTUDIANTE]
+    )
 
     response = client.get(f"/prestamos/usuarios/{usuario_id}/historial")
     assert response.status_code == 200
@@ -133,6 +139,8 @@ def test_consultar_historial_con_prestamos():
     assert datos[0]["id"] == str(prestamo.id)
     assert datos[0]["usuario_id"] == str(usuario_id)
     assert datos[0]["estado"] == "ACTIVO"
+    assert datos[0]["fecha_entrega_real"] is None
+    assert datos[0]["fecha_devolucion_real"] is None
 
 
 def _crear_usuario(usuario_id, roles):
@@ -167,6 +175,9 @@ def test_ciclo_entrega_endpoints_completo():
         recurso_repository=recurso_repository,
     )
     app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
 
     base = f"/prestamos/{prestamo.id}/entrega"
     iniciar = client.post(
@@ -373,6 +384,9 @@ def test_renovar_prestamo_activo():
         garantia_repository=SimpleNamespace(),
     )
     app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        prestamo.usuario_id, [RolUsuario.ESTUDIANTE]
+    )
 
     response = client.post(f"/prestamos/{prestamo.id}/renovar")
     assert response.status_code == 200
@@ -400,6 +414,9 @@ def test_completar_entrega_unificada():
         garantia_repository=garantia_repository,
     )
     app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
 
     res = client.post(
         f"/prestamos/{prestamo.id}/entrega/completar",
@@ -593,6 +610,216 @@ def test_devolucion_con_danos_retiene_garantia_e2e():
     data = insp.json()
     assert data["garantia"]["estado"] == "RETENIDA"
     assert data["garantia"]["fecha_liberacion"] is None
+
+
+@pytest.mark.e2e
+def test_entrega_endpoints_sin_token_retornan_401():
+    prestamo_id = uuid4()
+    payload_iniciar = {
+        "tipo_garantia": TipoGarantia.CARNET_UNIVERSITARIO.value,
+        "compromiso_contenido": "Compromiso",
+        "compromiso_firma_url": "https://example.com/firma.png",
+        "compromiso_testigo": "Operador",
+    }
+    payload_completar = {
+        **payload_iniciar,
+        "observaciones_checklist": "Todo conforme",
+        "fotos_urls": [],
+    }
+
+    assert client.post(f"/prestamos/{prestamo_id}/entrega/iniciar", json=payload_iniciar).status_code == 401
+    assert client.post(
+        f"/prestamos/{prestamo_id}/entrega/checklist/items",
+        json={"observaciones": "Ok", "fotos_urls": []},
+    ).status_code == 401
+    assert client.post(f"/prestamos/{prestamo_id}/entrega/confirmar").status_code == 401
+    assert client.post(f"/prestamos/{prestamo_id}/entrega/finalizar").status_code == 401
+    assert client.post(f"/prestamos/{prestamo_id}/entrega/completar", json=payload_completar).status_code == 401
+
+
+@pytest.mark.e2e
+def test_entrega_endpoints_con_estudiante_retornan_403():
+    prestamo_id = uuid4()
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.ESTUDIANTE]
+    )
+    payload_iniciar = {
+        "tipo_garantia": TipoGarantia.CARNET_UNIVERSITARIO.value,
+        "compromiso_contenido": "Compromiso",
+        "compromiso_firma_url": "https://example.com/firma.png",
+        "compromiso_testigo": "Operador",
+    }
+    payload_completar = {
+        **payload_iniciar,
+        "observaciones_checklist": "Todo conforme",
+        "fotos_urls": [],
+    }
+
+    assert client.post(f"/prestamos/{prestamo_id}/entrega/iniciar", json=payload_iniciar).status_code == 403
+    assert client.post(
+        f"/prestamos/{prestamo_id}/entrega/checklist/items",
+        json={"observaciones": "Ok", "fotos_urls": []},
+    ).status_code == 403
+    assert client.post(f"/prestamos/{prestamo_id}/entrega/confirmar").status_code == 403
+    assert client.post(f"/prestamos/{prestamo_id}/entrega/finalizar").status_code == 403
+    assert client.post(f"/prestamos/{prestamo_id}/entrega/completar", json=payload_completar).status_code == 403
+
+
+@pytest.mark.e2e
+def test_inspeccion_seguridad_401_404_403_y_titular_200():
+    titular_id = uuid4()
+    otro_id = uuid4()
+    ahora = datetime.now(UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=titular_id,
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=3),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    # Sin token -> 401
+    assert client.get(f"/prestamos/{prestamo.id}/inspeccion").status_code == 401
+
+    # Préstamo inexistente con usuario autenticado -> 404
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        otro_id, [RolUsuario.ESTUDIANTE]
+    )
+    assert client.get(f"/prestamos/{uuid4()}/inspeccion").status_code == 404
+
+    # Otro estudiante -> 403
+    assert client.get(f"/prestamos/{prestamo.id}/inspeccion").status_code == 403
+
+    # Titular -> 200
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        titular_id, [RolUsuario.ESTUDIANTE]
+    )
+    assert client.get(f"/prestamos/{prestamo.id}/inspeccion").status_code == 200
+
+
+@pytest.mark.e2e
+def test_renovar_seguridad_401_404_403_y_gestion_200():
+    titular_id = uuid4()
+    otro_id = uuid4()
+    ahora = datetime.now(UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=titular_id,
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=3),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    # Sin token -> 401
+    assert client.post(f"/prestamos/{prestamo.id}/renovar").status_code == 401
+
+    # Préstamo inexistente -> 404
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        otro_id, [RolUsuario.ESTUDIANTE]
+    )
+    assert client.post(f"/prestamos/{uuid4()}/renovar").status_code == 404
+
+    # Otro estudiante -> 403
+    assert client.post(f"/prestamos/{prestamo.id}/renovar").status_code == 403
+
+    # Gestor -> 200
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+    assert client.post(f"/prestamos/{prestamo.id}/renovar").status_code == 200
+
+
+@pytest.mark.e2e
+def test_historial_seguridad_401_403_y_gestion_200():
+    titular_id = uuid4()
+    otro_id = uuid4()
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([]),
+        checklist_repository=SimpleNamespace(),
+        garantia_repository=SimpleNamespace(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    # Sin token -> 401
+    assert client.get(f"/prestamos/usuarios/{titular_id}/historial").status_code == 401
+
+    # Otro estudiante -> 403
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        otro_id, [RolUsuario.ESTUDIANTE]
+    )
+    assert client.get(f"/prestamos/usuarios/{titular_id}/historial").status_code == 403
+
+    # Gestor -> 200
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+    assert client.get(f"/prestamos/usuarios/{titular_id}/historial").status_code == 200
+
+
+@pytest.mark.e2e
+def test_respuestas_api_exponen_fechas_reales_tras_entrega_y_devolucion():
+    titular_id = uuid4()
+    ahora = datetime.now(UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=titular_id,
+        fecha_inicio=ahora - timedelta(hours=1),
+        fecha_fin=ahora + timedelta(days=3),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+        recurso_repository=FakeRecursoRepository(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+
+    res_entrega = client.post(
+        f"/prestamos/{prestamo.id}/entrega/completar",
+        json={
+            "tipo_garantia": "CARNET_UNIVERSITARIO",
+            "compromiso_contenido": "Compromiso",
+            "compromiso_firma_url": "https://example.com/firma.png",
+            "compromiso_testigo": "Operador",
+            "observaciones_checklist": "Equipo completo",
+            "fotos_urls": [],
+        },
+    )
+    assert res_entrega.status_code == 200
+
+    res_lista = client.get("/prestamos")
+    assert res_lista.status_code == 200
+    item_entregado = res_lista.json()[0]
+    assert item_entregado["fecha_entrega_real"] is not None
+    assert item_entregado["fecha_devolucion_real"] is None
+
+    res_dev = client.post(f"/prestamos/{prestamo.id}/devolucion")
+    assert res_dev.status_code == 200
+
+    res_historial = client.get(f"/prestamos/usuarios/{titular_id}/historial")
+    assert res_historial.status_code == 200
+    item_devuelto = res_historial.json()[0]
+    assert item_devuelto["fecha_entrega_real"] is not None
+    assert item_devuelto["fecha_devolucion_real"] is not None
 
 
 

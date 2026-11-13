@@ -207,6 +207,10 @@ class PrestamoService:
 
     def consultar_inspecciones(self, id_prestamo: UUID) -> dict:
         """Devuelve los registros de garantía y checklist de un préstamo."""
+        prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
+        if prestamo is None:
+            raise ValueError("Préstamo no encontrado")
+
         inicial = (
             self._checklist_repository.obtener_por_prestamo_y_tipo(
                 id_prestamo, TipoChecklist.ESTADO_INICIAL
@@ -357,6 +361,13 @@ class PrestamoService:
     def validar_reglas_negocio(self) -> bool:
         """Placeholder para validar reglas de negocio del préstamo."""
         return True
+
+    def obtener_prestamo(self, id_prestamo: UUID) -> PrestamoDTO | None:
+        """Obtiene un préstamo por su identificador como DTO."""
+        prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
+        if prestamo is None:
+            return None
+        return PrestamoDTO.from_entity(prestamo)
 
     def consultar_historial(self, id_usuario: UUID) -> list[PrestamoDTO]:
         prestamos = self._prestamo_repository.obtener_por_usuario(id_usuario)
