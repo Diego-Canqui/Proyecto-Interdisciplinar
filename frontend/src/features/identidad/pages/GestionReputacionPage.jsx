@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { buscarRecursos } from "../../catalogo/api.js";
+import { consultarHistorial, consultarInspeccion } from "../../prestamos/api.js";
 import {
   anularExcepcion,
   aplicarSancion,
@@ -29,6 +31,14 @@ const CLASES_ESTADO_EXCEPCION = {
   PROGRAMADA: "insignia--info",
   VENCIDA: "insignia--aviso",
   ANULADA: "insignia--neutra",
+};
+
+const CLASES_ESTADO_PRESTAMO = {
+  ACTIVO: "insignia--info",
+  ENTREGADO: "insignia--exito",
+  DEVUELTO: "insignia--neutra",
+  VENCIDO: "insignia--error",
+  CANCELADO: "insignia--neutra",
 };
 
 /**
@@ -73,6 +83,16 @@ export default function GestionReputacionPage() {
   const [errorFicha, setErrorFicha] = useState(null);
   // Último usuario pedido: descarta respuestas de selecciones anteriores (RF-04)
   const idPedidoFicha = useRef(null);
+
+  // --- Estado de pestañas y del historial de préstamos del alumno (Spec 008, RF-07) ---
+  const [pestanaActiva, setPestanaActiva] = useState("reputacion");
+  const [prestamosAlumno, setPrestamosAlumno] = useState([]);
+  const [recursosCatalogo, setRecursosCatalogo] = useState([]);
+  const [cargandoHistorial, setCargandoHistorial] = useState(false);
+  const [errorHistorial, setErrorHistorial] = useState(null);
+  const [inspeccionVisualizada, setInspeccionVisualizada] = useState(null);
+  const [cargandoInspeccion, setCargandoInspeccion] = useState(false);
+  const [errorInspeccion, setErrorInspeccion] = useState(null);
 
   // --- Estado del formulario de sanción (T7, RF-05, RF-09) ---
   // Tipo de sanción: los cuatro valores posibles del dominio
@@ -190,6 +210,44 @@ export default function GestionReputacionPage() {
     [navigate]
   );
 
+  const cargarHistorialAlumno = useCallback(
+    async (usuarioId) => {
+      setCargandoHistorial(true);
+      setErrorHistorial(null);
+      setInspeccionVisualizada(null);
+      setErrorInspeccion(null);
+      try {
+        const [listaPrestamos, listaRecursos] = await Promise.all([
+          consultarHistorial(usuarioId),
+          recursosCatalogo.length > 0 ? Promise.resolve(recursosCatalogo) : buscarRecursos(),
+        ]);
+        if (idPedidoFicha.current !== usuarioId) {
+          return;
+        }
+        setPrestamosAlumno(Array.isArray(listaPrestamos) ? listaPrestamos : []);
+        if (recursosCatalogo.length === 0 && Array.isArray(listaRecursos)) {
+          setRecursosCatalogo(listaRecursos);
+        }
+      } catch (err) {
+        if (idPedidoFicha.current !== usuarioId) {
+          return;
+        }
+        if (err.status === 401) {
+          localStorage.removeItem("token");
+          navigate("/login");
+          return;
+        }
+        setPrestamosAlumno([]);
+        setErrorHistorial(mensajeDeError(err));
+      } finally {
+        if (idPedidoFicha.current === usuarioId) {
+          setCargandoHistorial(false);
+        }
+      }
+    },
+    [navigate, recursosCatalogo]
+  );
+
   // Cargar la ficha al seleccionar un usuario y al cambiar de selección (RF-03, RF-04)
   useEffect(() => {
     if (!seleccionado) {
@@ -197,10 +255,39 @@ export default function GestionReputacionPage() {
       setFicha(null);
       setErrorFicha(null);
       setCargandoFicha(false);
+      setPrestamosAlumno([]);
+      setErrorHistorial(null);
+      setInspeccionVisualizada(null);
+      setErrorInspeccion(null);
       return;
     }
     cargarFicha(seleccionado.id);
-  }, [seleccionado, cargarFicha]);
+    cargarHistorialAlumno(seleccionado.id);
+  }, [seleccionado, cargarFicha, cargarHistorialAlumno]);
+
+  const recursosPorId = useMemo(
+    () => new Map(recursosCatalogo.map((r) => [r.id, r])),
+    [recursosCatalogo]
+  );
+
+  const verInspeccionAlumno = async (idPrestamo) => {
+    setCargandoInspeccion(true);
+    setErrorInspeccion(null);
+    setInspeccionVisualizada(null);
+    try {
+      const data = await consultarInspeccion(idPrestamo);
+      setInspeccionVisualizada(data);
+    } catch (err) {
+      if (err.status === 401) {
+        localStorage.removeItem("token");
+        navigate("/login");
+        return;
+      }
+      setErrorInspeccion(mensajeDeError(err));
+    } finally {
+      setCargandoInspeccion(false);
+    }
+  };
 
   // Filtro local: sin peticiones por tecla y sin distinguir mayúsculas ni acentos (RF-03)
   const textoFiltro = normalizar(filtro);
@@ -512,9 +599,10 @@ export default function GestionReputacionPage() {
   return (
     <div>
       <header className="pagina__cabecera">
-        <h1 className="pagina__titulo">Gestión de reputación</h1>
+        <h1 className="pagina__titulo">Alumnos y gestión de reputación</h1>
         <p className="pagina__subtitulo">
-          Elige un usuario para consultar su reputación y gestionar sus sanciones y excepciones.
+          Elige un alumno para consultar su reputación, gestionar sanciones y excepciones, y
+          revisar su historial de préstamos.
         </p>
       </header>
 
@@ -629,16 +717,52 @@ export default function GestionReputacionPage() {
                 </div>
               )}
 
-              {/* Usuario seleccionado: estados de carga, error y contenido */}
+              {/* Usuario seleccionado: pestañas de Reputación e Historial de Préstamos */}
               {seleccionado && (
                 <>
                   <p>
-                    Usuario seleccionado: <strong>{seleccionado.nombre}</strong> (
+                    Alumno seleccionado: <strong>{seleccionado.nombre}</strong> (
                     {seleccionado.correo}).
                   </p>
 
-                  {/* Cargando la ficha */}
-                  {cargandoFicha && (
+                  <div
+                    role="tablist"
+                    aria-label="Secciones de la ficha del alumno"
+                    style={{
+                      display: "flex",
+                      gap: "0.5rem",
+                      flexWrap: "wrap",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={pestanaActiva === "reputacion"}
+                      className={`boton boton--sm ${
+                        pestanaActiva === "reputacion" ? "boton--primario" : "boton--fantasma"
+                      }`}
+                      onClick={() => setPestanaActiva("reputacion")}
+                    >
+                      Reputación y Sanciones
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={pestanaActiva === "historial"}
+                      className={`boton boton--sm ${
+                        pestanaActiva === "historial" ? "boton--primario" : "boton--fantasma"
+                      }`}
+                      onClick={() => setPestanaActiva("historial")}
+                    >
+                      Historial de Préstamos ({prestamosAlumno.length})
+                    </button>
+                  </div>
+
+                  {pestanaActiva === "reputacion" && (
+                    <>
+                      {/* Cargando la ficha */}
+                      {cargandoFicha && (
                     <p className="cargando" role="status">
                       Cargando ficha de reputación...
                     </p>
@@ -853,13 +977,190 @@ export default function GestionReputacionPage() {
                       )}
                     </>
                   )}
+                    </>
+                  )}
+
+                  {pestanaActiva === "historial" && (
+                    <div className="formulario">
+                      {cargandoHistorial ? (
+                        <p className="cargando" role="status">
+                          Cargando historial de préstamos del alumno...
+                        </p>
+                      ) : errorHistorial ? (
+                        <div className="alerta alerta--error" role="alert">
+                          <span>{errorHistorial}</span>{" "}
+                          <button
+                            type="button"
+                            className="boton boton--secundario boton--sm"
+                            onClick={() => cargarHistorialAlumno(seleccionado.id)}
+                          >
+                            Reintentar
+                          </button>
+                        </div>
+                      ) : prestamosAlumno.length === 0 ? (
+                        <div className="estado-vacio">
+                          <p className="estado-vacio__titulo">Sin préstamos registrados</p>
+                          <p>Este alumno aún no tiene préstamos asociados.</p>
+                        </div>
+                      ) : (
+                        <>
+                          {errorInspeccion && (
+                            <div className="alerta alerta--error" role="alert">
+                              {errorInspeccion}
+                            </div>
+                          )}
+
+                          {inspeccionVisualizada && (
+                            <div
+                              className="tarjeta"
+                              style={{ border: "1px solid var(--primario)", marginBottom: "1rem" }}
+                            >
+                              <div className="tarjeta__cuerpo">
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                    marginBottom: "0.75rem",
+                                  }}
+                                >
+                                  <strong>Detalle de inspección y garantía</strong>
+                                  <button
+                                    type="button"
+                                    className="boton boton--fantasma boton--sm"
+                                    onClick={() => setInspeccionVisualizada(null)}
+                                  >
+                                    Cerrar
+                                  </button>
+                                </div>
+                                <div className="grilla">
+                                  <div>
+                                    <strong>Garantía:</strong>{" "}
+                                    {inspeccionVisualizada.garantia ? (
+                                      <div className="campo__ayuda">
+                                        Tipo: {inspeccionVisualizada.garantia.tipo} · Estado:{" "}
+                                        {inspeccionVisualizada.garantia.estado} · Testigo:{" "}
+                                        {inspeccionVisualizada.garantia.testigo}
+                                        {inspeccionVisualizada.garantia.fecha_liberacion && (
+                                          <>
+                                            {" "}
+                                            · Liberación:{" "}
+                                            {formatearFecha(
+                                              inspeccionVisualizada.garantia.fecha_liberacion
+                                            )}
+                                          </>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="campo__ayuda">Sin garantía registrada.</div>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <strong>Checklist inicial:</strong>
+                                    <div className="campo__ayuda">
+                                      {inspeccionVisualizada.checklist_inicial
+                                        ? `${formatearFecha(
+                                            inspeccionVisualizada.checklist_inicial.fecha_inspeccion
+                                          )} — ${
+                                            inspeccionVisualizada.checklist_inicial.observaciones
+                                          }`
+                                        : "Pendiente de entrega física."}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <strong>Checklist de devolución:</strong>
+                                    <div className="campo__ayuda">
+                                      {inspeccionVisualizada.checklist_devolucion
+                                        ? `${formatearFecha(
+                                            inspeccionVisualizada.checklist_devolucion
+                                              .fecha_inspeccion
+                                          )} — ${
+                                            inspeccionVisualizada.checklist_devolucion.observaciones
+                                          }`
+                                        : "Pendiente de devolución."}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="tabla__contenedor">
+                            <table className="tabla tabla--apilada">
+                              <thead>
+                                <tr>
+                                  <th scope="col">Recurso</th>
+                                  <th scope="col">Estado</th>
+                                  <th scope="col">Periodo pactado</th>
+                                  <th scope="col">Tiempos reales</th>
+                                  <th scope="col">Inspección</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {prestamosAlumno.map((prestamo) => {
+                                  const recurso = recursosPorId.get(prestamo.recurso_id);
+                                  return (
+                                    <tr key={prestamo.id}>
+                                      <td data-etiqueta="Recurso">
+                                        <strong>
+                                          {recurso?.nombre || "Recurso del catálogo"}
+                                        </strong>
+                                      </td>
+                                      <td data-etiqueta="Estado">
+                                        <span
+                                          className={`insignia ${
+                                            CLASES_ESTADO_PRESTAMO[prestamo.estado] ||
+                                            "insignia--neutra"
+                                          }`}
+                                        >
+                                          {prestamo.estado}
+                                        </span>
+                                      </td>
+                                      <td data-etiqueta="Periodo pactado">
+                                        <div>Inicio: {formatearFecha(prestamo.fecha_inicio)}</div>
+                                        <div>Fin: {formatearFecha(prestamo.fecha_fin)}</div>
+                                      </td>
+                                      <td data-etiqueta="Tiempos reales">
+                                        <div>
+                                          Recogida:{" "}
+                                          {prestamo.fecha_entrega_real
+                                            ? formatearFecha(prestamo.fecha_entrega_real)
+                                            : "Pendiente"}
+                                        </div>
+                                        <div>
+                                          Devolución:{" "}
+                                          {prestamo.fecha_devolucion_real
+                                            ? formatearFecha(prestamo.fecha_devolucion_real)
+                                            : "Pendiente"}
+                                        </div>
+                                      </td>
+                                      <td data-etiqueta="Inspección">
+                                        <button
+                                          type="button"
+                                          className="boton boton--fantasma boton--sm"
+                                          disabled={cargandoInspeccion}
+                                          onClick={() => verInspeccionAlumno(prestamo.id)}
+                                        >
+                                          Checklist
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
             </div>
           </section>
 
-          {/* Formularios de sanción y excepción: solo cuando hay usuario seleccionado (T7, RF-05, RF-06) */}
-          {seleccionado && (
+          {/* Formularios de sanción y excepción: solo en pestaña de reputación */}
+          {seleccionado && pestanaActiva === "reputacion" && (
             <>
               {/* Formulario de sanción (RF-05, RF-09) */}
               <section className="tarjeta">
