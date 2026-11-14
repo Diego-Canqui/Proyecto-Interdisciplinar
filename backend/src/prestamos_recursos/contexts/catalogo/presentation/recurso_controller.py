@@ -13,9 +13,19 @@ from prestamos_recursos.contexts.catalogo.application.dto.recurso_dto import (
 )
 from prestamos_recursos.contexts.catalogo.application.services import RecursoApplicationService
 from prestamos_recursos.contexts.catalogo.infrastructure.repositories import SqlRecursoRepository
+from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
+    UsuarioDTO,
+)
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import (
+    RolUsuario,
+)
+from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies import (
+    require_roles,
+)
 from prestamos_recursos.shared.database import get_session
 
 router = APIRouter(prefix="/recursos", tags=["Recursos"])
+_solo_gestion = require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)
 
 
 @router.get("", response_model=list[RecursoDTO])
@@ -32,6 +42,7 @@ def buscar_recursos(
 def crear_recurso(
     dto: CrearRecursoDTO,
     session: Session = Depends(get_session, scope="function"),  # noqa: B008
+    _usuario: UsuarioDTO = Depends(_solo_gestion),  # noqa: B008
 ):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
@@ -81,6 +92,7 @@ def actualizar_recurso(
     id_recurso: UUID,
     dto: ActualizarRecursoDTO,
     session: Session = Depends(get_session, scope="function"),  # noqa: B008
+    _usuario: UsuarioDTO = Depends(_solo_gestion),  # noqa: B008
 ):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
@@ -111,6 +123,7 @@ def actualizar_estado(
     id_recurso: UUID,
     dto: ActualizarEstadoRecursoDTO,
     session: Session = Depends(get_session, scope="function"),  # noqa: B008
+    _usuario: UsuarioDTO = Depends(_solo_gestion),  # noqa: B008
 ):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)

@@ -7,11 +7,12 @@ const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
 
 const ENLACES = [
   { a: "/recursos", texto: "Recursos" },
-  { a: "/reservas", texto: "Reservas" },
-  { a: "/historial", texto: "Historial" },
-  { a: "/reputacion", texto: "Reputación", soloSolicitante: true },
+  { a: "/reservas", texto: "Mis Reservas", soloSolicitante: true },
+  { a: "/historial", texto: "Mis Préstamos", soloSolicitante: true },
+  { a: "/reputacion", texto: "Mi Reputación", soloSolicitante: true },
+  { a: "/ventanilla", texto: "Ventanilla", soloGestion: true },
+  { a: "/gestion-reputacion", texto: "Alumnos", soloGestion: true },
   { a: "/usuarios", texto: "Usuarios", soloGestion: true },
-  { a: "/gestion-reputacion", texto: "Gestión de reputación", soloGestion: true },
 ];
 
 /**

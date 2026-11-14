@@ -491,5 +491,89 @@ def test_procesar_devolucion_con_danos_retiene_garantia():
     assert inspecciones["garantia"]["fecha_liberacion"] is None
 
 
+def test_obtener_prestamo_retorna_dto_o_none():
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    repo = FakePrestamoRepository([prestamo])
+    service = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+    )
+
+    dto = service.obtener_prestamo(prestamo.id)
+    assert dto is not None
+    assert isinstance(dto, PrestamoDTO)
+    assert dto.id == prestamo.id
+    assert dto.fecha_entrega_real is None
+    assert dto.fecha_devolucion_real is None
+
+    assert service.obtener_prestamo(uuid4()) is None
+
+
+def test_completar_entrega_y_devolucion_registran_fechas_reales():
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime.now(UTC) - timedelta(hours=1),
+        fecha_fin=datetime.now(UTC) + timedelta(days=2),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    repo = FakePrestamoRepository([prestamo])
+    checklist_repo = FakeChecklistRepository()
+    garantia_repo = FakeGarantiaRepository()
+    recurso_repo = FakeRecursoRepository()
+    service = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=checklist_repo,
+        garantia_repository=garantia_repo,
+        recurso_repository=recurso_repo,
+    )
+
+    compromiso = CompromisoResponsabilidad(
+        contenido="Compromiso firmado",
+        fecha_firma=datetime.now(UTC),
+        firma_url="https://example.com/firma.png",
+        testigo="Operador",
+    )
+    service.completar_entrega(
+        prestamo.id,
+        TipoGarantia.CARNET_UNIVERSITARIO,
+        compromiso,
+        observaciones_checklist="Equipo completo",
+    )
+
+    dto_entregado = service.obtener_prestamo(prestamo.id)
+    assert dto_entregado is not None
+    assert dto_entregado.estado == EstadoPrestamo.ENTREGADO
+    assert dto_entregado.fecha_entrega_real is not None
+    assert dto_entregado.fecha_devolucion_real is None
+
+    service.procesar_devolucion(prestamo.id, observaciones_retorno="Sin novedades")
+    dto_devuelto = service.obtener_prestamo(prestamo.id)
+    assert dto_devuelto is not None
+    assert dto_devuelto.estado == EstadoPrestamo.DEVUELTO
+    assert dto_devuelto.fecha_entrega_real == dto_entregado.fecha_entrega_real
+    assert dto_devuelto.fecha_devolucion_real is not None
+
+
+def test_consultar_inspecciones_prestamo_inexistente_lanza_error():
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+    )
+
+    with pytest.raises(ValueError, match="Préstamo no encontrado"):
+        service.consultar_inspecciones(uuid4())
+
+
 
 

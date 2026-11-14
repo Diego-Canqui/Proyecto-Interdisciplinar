@@ -40,6 +40,48 @@ def test_guardar_y_obtener_por_id():
     assert recuperado.id == prestamo.id
     assert recuperado.usuario_id == prestamo.usuario_id
     assert recuperado.estado == EstadoPrestamo.ACTIVO
+    assert recuperado.fecha_entrega_real is None
+    assert recuperado.fecha_devolucion_real is None
+
+
+def test_guardar_y_recuperar_fechas_reales():
+    session = make_session()
+    repo = SqlPrestamoRepository(session)
+    fecha_entrega = datetime(2026, 10, 20, 10, 15, tzinfo=UTC)
+    fecha_devolucion = datetime(2026, 10, 24, 16, 45, tzinfo=UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 20, 9, 0, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 25, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+
+    with session.begin():
+        repo.guardar(prestamo)
+
+    with session.begin():
+        prestamo.marcar_entregado(fecha_entrega)
+        repo.guardar(prestamo)
+        entregado = repo.obtener_por_id(prestamo.id)
+        assert entregado is not None
+        assert entregado.estado == EstadoPrestamo.ENTREGADO
+        assert entregado.fecha_entrega_real is not None
+        assert entregado.fecha_entrega_real.replace(tzinfo=UTC) == fecha_entrega
+        assert entregado.fecha_devolucion_real is None
+
+    with session.begin():
+        prestamo.devolver(fecha_devolucion)
+        repo.guardar(prestamo)
+
+    devuelto = repo.obtener_por_id(prestamo.id)
+    assert devuelto is not None
+    assert devuelto.estado == EstadoPrestamo.DEVUELTO
+    assert devuelto.fecha_entrega_real is not None
+    assert devuelto.fecha_entrega_real.replace(tzinfo=UTC) == fecha_entrega
+    assert devuelto.fecha_devolucion_real is not None
+    assert devuelto.fecha_devolucion_real.replace(tzinfo=UTC) == fecha_devolucion
 
 
 def test_obtener_activos():

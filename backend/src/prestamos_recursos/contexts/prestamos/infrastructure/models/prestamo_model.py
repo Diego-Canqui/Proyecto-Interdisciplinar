@@ -25,3 +25,9 @@ class PrestamoModel(Base):
     fecha_inicio: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     fecha_fin: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     estado: Mapped[EstadoPrestamo] = mapped_column(SAEnum(EstadoPrestamo, native_enum=False, length=30))
+    fecha_entrega_real: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    fecha_devolucion_real: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )

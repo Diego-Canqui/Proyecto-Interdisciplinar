@@ -13,6 +13,7 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario i
     RolUsuario,
 )
 from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies import (
+    get_current_user,
     require_roles,
 )
 from prestamos_recursos.contexts.prestamos.application.dto.prestamo_dto import PrestamoDTO
@@ -26,6 +27,22 @@ from prestamos_recursos.contexts.prestamos.presentation.dependencies import (
 )
 
 router = APIRouter(prefix="/prestamos", tags=["Préstamos"])
+_solo_gestion = require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)
+
+
+def _es_gestion(usuario: UsuarioDTO) -> bool:
+    return any(
+        rol in (RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)
+        for rol in usuario.roles
+    )
+
+
+def _validar_titular_o_gestion(usuario: UsuarioDTO, usuario_id_objetivo: UUID) -> None:
+    if not _es_gestion(usuario) and usuario.id != usuario_id_objetivo:
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permisos para realizar esta acción",
+        )
 
 
 # ------------------------------------------------------------
@@ -69,6 +86,7 @@ class DevolucionDTO(BaseModel):
 def iniciar_entrega(
     id_prestamo: UUID,
     data: EntregaIniciarDTO,
+    _usuario: UsuarioDTO = Depends(_solo_gestion),  # noqa: B008
     service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     """Inicia el proceso de entrega creando garantía y checklist."""
@@ -90,6 +108,7 @@ def iniciar_entrega(
 def agregar_item_checklist(
     id_prestamo: UUID,
     data: ChecklistItemDTO,
+    _usuario: UsuarioDTO = Depends(_solo_gestion),  # noqa: B008
     service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     try:
@@ -103,6 +122,7 @@ def agregar_item_checklist(
 @router.post("/{id_prestamo}/entrega/confirmar")
 def confirmar_entrega(
     id_prestamo: UUID,
+    _usuario: UsuarioDTO = Depends(_solo_gestion),  # noqa: B008
     service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     try:
@@ -116,6 +136,7 @@ def confirmar_entrega(
 @router.post("/{id_prestamo}/entrega/finalizar")
 def finalizar_entrega(
     id_prestamo: UUID,
+    _usuario: UsuarioDTO = Depends(_solo_gestion),  # noqa: B008
     service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     try:
@@ -130,6 +151,7 @@ def finalizar_entrega(
 def completar_entrega(
     id_prestamo: UUID,
     data: EntregaCompletaDTO,
+    _usuario: UsuarioDTO = Depends(_solo_gestion),  # noqa: B008
     service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     """Ejecuta el ciclo de entrega completo (garantía + checklist) de forma unificada."""
@@ -156,9 +178,14 @@ def completar_entrega(
 @router.get("/{id_prestamo}/inspeccion")
 def consultar_inspecciones(
     id_prestamo: UUID,
+    usuario: UsuarioDTO = Depends(get_current_user),  # noqa: B008
     service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     """Consulta los datos de garantía y checklists (inicial y retorno)."""
+    prestamo = service.obtener_prestamo(id_prestamo)
+    if prestamo is None:
+        raise HTTPException(status_code=404, detail="Préstamo no encontrado")
+    _validar_titular_o_gestion(usuario, prestamo.usuario_id)
     return service.consultar_inspecciones(id_prestamo)
 
 
@@ -199,9 +226,14 @@ def registrar_devolucion(
 @router.post("/{id_prestamo}/renovar")
 def renovar_prestamo(
     id_prestamo: UUID,
+    usuario: UsuarioDTO = Depends(get_current_user),  # noqa: B008
     service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
     """Renueva un préstamo activo extendiendo el plazo de devolución."""
+    prestamo = service.obtener_prestamo(id_prestamo)
+    if prestamo is None:
+        raise HTTPException(status_code=404, detail="Préstamo no encontrado")
+    _validar_titular_o_gestion(usuario, prestamo.usuario_id)
     try:
         service.renovar_prestamo(id_prestamo)
     except ValueError as exc:
@@ -231,9 +263,11 @@ def cancelar_prestamo(
 @router.get("/usuarios/{id_usuario}/historial", response_model=list[PrestamoDTO])
 def consultar_historial(
     id_usuario: UUID,
+    usuario: UsuarioDTO = Depends(get_current_user),  # noqa: B008
     service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> list[PrestamoDTO]:
     """Consulta el historial de préstamos de un usuario."""
+    _validar_titular_o_gestion(usuario, id_usuario)
     return service.consultar_historial(id_usuario)
 
 

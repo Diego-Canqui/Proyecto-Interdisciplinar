@@ -31,6 +31,42 @@ def test_creacion_prestamo_valido():
     assert prestamo.id is not None
     assert prestamo.estado == EstadoPrestamo.ACTIVO
     assert prestamo.fecha_fin > prestamo.fecha_inicio
+    assert prestamo.fecha_entrega_real is None
+    assert prestamo.fecha_devolucion_real is None
+
+
+@pytest.mark.unit
+def test_marcar_entregado_registra_fecha_entrega_real():
+    prestamo = _crear_prestamo(estado=EstadoPrestamo.ACTIVO)
+    fecha_entrega = datetime(2026, 10, 1, 9, 30, tzinfo=UTC)
+
+    prestamo.marcar_entregado(fecha_entrega)
+
+    assert prestamo.estado == EstadoPrestamo.ENTREGADO
+    assert prestamo.fecha_entrega_real == fecha_entrega
+    assert prestamo.fecha_devolucion_real is None
+
+
+@pytest.mark.unit
+def test_marcar_entregado_sin_fecha_usa_utc_actual():
+    prestamo = _crear_prestamo(estado=EstadoPrestamo.ACTIVO)
+    antes = datetime.now(UTC)
+
+    prestamo.marcar_entregado()
+
+    despues = datetime.now(UTC)
+    assert prestamo.estado == EstadoPrestamo.ENTREGADO
+    assert prestamo.fecha_entrega_real is not None
+    assert prestamo.fecha_entrega_real.tzinfo == UTC
+    assert antes <= prestamo.fecha_entrega_real <= despues
+
+
+@pytest.mark.unit
+def test_marcar_entregado_no_activo_lanza_error():
+    prestamo = _crear_prestamo(estado=EstadoPrestamo.ENTREGADO)
+    with pytest.raises(ValueError, match="Sólo pueden marcarse como entregados préstamos activos"):
+        prestamo.marcar_entregado()
+    assert prestamo.fecha_entrega_real is None
 
 
 @pytest.mark.unit
@@ -72,6 +108,7 @@ def test_devolver_prestamo_a_tiempo():
 
     assert dias_retraso == 0
     assert prestamo.estado == EstadoPrestamo.DEVUELTO
+    assert prestamo.fecha_devolucion_real == fecha_devolucion
 
 
 @pytest.mark.unit
