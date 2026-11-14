@@ -1,6 +1,7 @@
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
 
@@ -19,6 +20,7 @@ class RecursoDTO(BaseModel):
     color: str | None = None
     estado_fisico: str | None = None
     foto_url: str | None = None
+    especificaciones: dict[str, Any] = Field(default_factory=dict)
 
 
 class CrearRecursoDTO(BaseModel):
@@ -27,12 +29,13 @@ class CrearRecursoDTO(BaseModel):
     nombre: str
     descripcion: str
     categoria: str
-    marca: str
-    modelo: str
-    numero_serie: str
-    color: str
+    marca: str | None = None
+    modelo: str | None = None
+    numero_serie: str | None = None
+    color: str | None = None
     estado_fisico: str
     foto_url: str
+    especificaciones: dict[str, Any] = Field(default_factory=dict)
 
 
 class ActualizarEstadoRecursoDTO(BaseModel):
@@ -47,9 +50,10 @@ class ActualizarRecursoDTO(BaseModel):
     nombre: str
     descripcion: str
     categoria: str
-    marca: str
-    modelo: str
-    numero_serie: str
-    color: str
+    marca: str | None = None
+    modelo: str | None = None
+    numero_serie: str | None = None
+    color: str | None = None
     estado_fisico: str
     foto_url: str
+    especificaciones: dict[str, Any] = Field(default_factory=dict)

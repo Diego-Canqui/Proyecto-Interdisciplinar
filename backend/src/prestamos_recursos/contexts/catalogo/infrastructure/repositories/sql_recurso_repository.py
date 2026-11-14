@@ -33,6 +33,7 @@ class SqlRecursoRepository(RecursoRepository):
                 color=recurso.ficha_tecnica.color,
                 estado_fisico=recurso.ficha_tecnica.estado_fisico,
                 foto_url=recurso.ficha_tecnica.foto_url,
+                especificaciones=dict(recurso.ficha_tecnica.especificaciones),
             )
             self._session.add(model)
         else:
@@ -46,6 +47,7 @@ class SqlRecursoRepository(RecursoRepository):
             model.color = recurso.ficha_tecnica.color
             model.estado_fisico = recurso.ficha_tecnica.estado_fisico
             model.foto_url = recurso.ficha_tecnica.foto_url
+            model.especificaciones = dict(recurso.ficha_tecnica.especificaciones)
         self._session.flush()
 
     def obtener_por_id(self, id: UUID) -> Recurso | None:
@@ -88,6 +90,7 @@ class SqlRecursoRepository(RecursoRepository):
             color=model.color,
             estado_fisico=model.estado_fisico,
             foto_url=model.foto_url,
+            especificaciones=dict(model.especificaciones or {}),
         )
         return Recurso(
             id=model.id,

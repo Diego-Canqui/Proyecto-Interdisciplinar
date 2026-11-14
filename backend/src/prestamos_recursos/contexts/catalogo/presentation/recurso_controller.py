@@ -57,6 +57,7 @@ def crear_recurso(
             color=dto.color,
             estado_fisico=dto.estado_fisico,
             foto_url=dto.foto_url,
+            especificaciones=dto.especificaciones,
         )
         return {"id": id_recurso, "mensaje": "Recurso creado exitosamente"}
     except ValueError as e:
@@ -108,6 +109,7 @@ def actualizar_recurso(
             color=dto.color,
             estado_fisico=dto.estado_fisico,
             foto_url=dto.foto_url,
+            especificaciones=dto.especificaciones,
         )
     except ValueError as e:
         status_code = (

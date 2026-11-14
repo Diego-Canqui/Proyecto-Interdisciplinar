@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -11,7 +12,11 @@ from prestamos_recursos.contexts.prestamos.domain.entities.garantia import Garan
 from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_garantia import EstadoGarantia
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_sancion import TipoSancion
 from prestamos_recursos.contexts.prestamos.domain.enums.tipo_checklist import TipoChecklist
+from prestamos_recursos.contexts.prestamos.domain.enums.tipo_dano_devolucion import (
+    TipoDanoDevolucion,
+)
 from prestamos_recursos.contexts.prestamos.domain.enums.tipo_garantia import TipoGarantia
 from prestamos_recursos.contexts.prestamos.domain.value_objects.compromiso_responsabilidad import (
     CompromisoResponsabilidad,
@@ -573,6 +578,292 @@ def test_consultar_inspecciones_prestamo_inexistente_lanza_error():
 
     with pytest.raises(ValueError, match="Préstamo no encontrado"):
         service.consultar_inspecciones(uuid4())
+
+
+class FakeReputacionService:
+    def __init__(self) -> None:
+        self.sanciones: list[dict] = []
+        self.premios: list = []
+
+    def aplicar_sancion(
+        self,
+        usuario_id,
+        tipo: TipoSancion,
+        motivo: str,
+        monto_opcional: Decimal | None = None,
+        dias_retardo: int | None = None,
+    ) -> None:
+        self.sanciones.append(
+            {
+                "usuario_id": usuario_id,
+                "tipo": tipo,
+                "motivo": motivo,
+                "monto_opcional": monto_opcional,
+                "dias_retardo": dias_retardo,
+            }
+        )
+
+    def premiar_devolucion_puntual(self, usuario_id) -> None:
+        self.premios.append(usuario_id)
+
+
+def test_obtener_plantilla_checklist_por_categoria_y_respaldo_generico():
+    recurso_id = uuid4()
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_id,
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    repo = FakePrestamoRepository([prestamo])
+
+    recurso_repo_libros = SimpleNamespace(
+        obtener_por_id=lambda _id: SimpleNamespace(id=recurso_id, categoria="Libros")
+    )
+    service_libros = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+        catalogo_service=recurso_repo_libros,
+    )
+    plantilla = service_libros.obtener_plantilla_checklist(prestamo.id)
+    assert plantilla["prestamo_id"] == prestamo.id
+    assert plantilla["recurso_id"] == recurso_id
+    assert plantilla["categoria"] == "Libros"
+    assert any(item["id"] == "paginas" for item in plantilla["items"])
+
+    # Con catalogo_service=None o obtener_por_id() -> None, cae a genérica sin AttributeError
+    service_sin_catalogo = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+    )
+    plantilla_gen = service_sin_catalogo.obtener_plantilla_checklist(prestamo.id)
+    assert plantilla_gen["categoria"] == ""
+    assert any(item["id"] == "estado_general" for item in plantilla_gen["items"])
+
+    service_recurso_none = PrestamoService(
+        prestamo_repository=repo,
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+        catalogo_service=SimpleNamespace(obtener_por_id=lambda _id: None),
+    )
+    plantilla_none = service_recurso_none.obtener_plantilla_checklist(prestamo.id)
+    assert plantilla_none["categoria"] == ""
+    assert any(item["id"] == "estado_general" for item in plantilla_none["items"])
+
+    with pytest.raises(ValueError, match="Préstamo no encontrado"):
+        service_libros.obtener_plantilla_checklist(uuid4())
+
+
+def test_procesar_devolucion_dano_parcial():
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    garantia = Garantia(
+        prestamo_id=prestamo.id,
+        tipo=TipoGarantia.CARNET_UNIVERSITARIO,
+        estado=EstadoGarantia.REGISTRADA,
+        fecha_registro=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        compromiso=CompromisoResponsabilidad(
+            contenido="Compromiso",
+            fecha_firma=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+            firma_url="https://example.com/firma.png",
+            testigo="Operador",
+        ),
+    )
+    garantia_repo = FakeGarantiaRepository()
+    garantia_repo.guardar(garantia)
+    recurso_repo = FakeRecursoRepository()
+    reputacion = FakeReputacionService()
+
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=garantia_repo,
+        reputacion_service=reputacion,
+        recurso_repository=recurso_repo,
+    )
+
+    resultado = service.procesar_devolucion_detallada(
+        prestamo.id,
+        observaciones_retorno="Teclado dañado",
+        tipo_dano=TipoDanoDevolucion.DANO_PARCIAL,
+        fecha_devolucion=datetime(2026, 10, 5, 12, 0, tzinfo=UTC),
+    )
+
+    assert resultado["dias_retraso"] == 0
+    assert resultado["puntual"] is True
+    assert resultado["tipo_dano"] == TipoDanoDevolucion.DANO_PARCIAL.value
+    assert garantia.estado == EstadoGarantia.RETENIDA
+    assert recurso_repo.estado == EstadoRecurso.MANTENIMIENTO
+    assert len(reputacion.sanciones) == 1
+    assert reputacion.sanciones[0]["tipo"] == TipoSancion.DANO_PARCIAL
+    assert reputacion.premios == []
+
+
+def test_procesar_devolucion_dano_total_con_monto_valido():
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    garantia = Garantia(
+        prestamo_id=prestamo.id,
+        tipo=TipoGarantia.CARNET_UNIVERSITARIO,
+        estado=EstadoGarantia.REGISTRADA,
+        fecha_registro=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        compromiso=CompromisoResponsabilidad(
+            contenido="Compromiso",
+            fecha_firma=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+            firma_url="https://example.com/firma.png",
+            testigo="Operador",
+        ),
+    )
+    garantia_repo = FakeGarantiaRepository()
+    garantia_repo.guardar(garantia)
+    recurso_repo = FakeRecursoRepository()
+    reputacion = FakeReputacionService()
+
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=garantia_repo,
+        reputacion_service=reputacion,
+        recurso_repository=recurso_repo,
+    )
+
+    resultado = service.procesar_devolucion_detallada(
+        prestamo.id,
+        observaciones_retorno="Equipo destruido",
+        tipo_dano=TipoDanoDevolucion.DANO_TOTAL,
+        monto_dano=Decimal("450.00"),
+        fecha_devolucion=datetime(2026, 10, 5, 12, 0, tzinfo=UTC),
+    )
+
+    assert resultado["tipo_dano"] == TipoDanoDevolucion.DANO_TOTAL.value
+    assert garantia.estado == EstadoGarantia.RETENIDA
+    assert recurso_repo.estado == EstadoRecurso.FUERA_DE_SERVICIO
+    assert len(reputacion.sanciones) == 1
+    assert reputacion.sanciones[0]["tipo"] == TipoSancion.DANO_TOTAL
+    assert reputacion.sanciones[0]["monto_opcional"] == Decimal("450.00")
+    assert reputacion.premios == []
+
+
+@pytest.mark.parametrize("monto_invalido", [None, Decimal("0"), Decimal("-15")])
+def test_procesar_devolucion_dano_total_sin_monto_lanza_error_sin_mutar(monto_invalido):
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    recurso_repo = FakeRecursoRepository()
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+        recurso_repository=recurso_repo,
+    )
+
+    with pytest.raises(ValueError, match="monto mayor a cero"):
+        service.procesar_devolucion_detallada(
+            prestamo.id,
+            tipo_dano=TipoDanoDevolucion.DANO_TOTAL,
+            monto_dano=monto_invalido,
+        )
+
+    assert prestamo.estado == EstadoPrestamo.ENTREGADO
+    assert recurso_repo.estado == EstadoRecurso.EN_USO
+
+
+def test_procesar_devolucion_mismo_dia_tarde_no_sanciona_ni_premia_puntualidad():
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 5, 9, 0, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 5, 14, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    reputacion = FakeReputacionService()
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+        reputacion_service=reputacion,
+        recurso_repository=FakeRecursoRepository(),
+    )
+
+    resultado = service.procesar_devolucion_detallada(
+        prestamo.id,
+        fecha_devolucion=datetime(2026, 10, 5, 16, 0, tzinfo=UTC),
+    )
+
+    assert resultado["dias_retraso"] == 0
+    assert resultado["puntual"] is False
+    assert reputacion.sanciones == []
+    assert reputacion.premios == []
+
+
+def test_procesar_devolucion_puntual_sin_danos_premia_reputacion():
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 5, 9, 0, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 5, 14, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    reputacion = FakeReputacionService()
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+        reputacion_service=reputacion,
+        recurso_repository=FakeRecursoRepository(),
+    )
+
+    resultado = service.procesar_devolucion_detallada(
+        prestamo.id,
+        fecha_devolucion=datetime(2026, 10, 5, 14, 0, tzinfo=UTC),
+    )
+
+    assert resultado["dias_retraso"] == 0
+    assert resultado["puntual"] is True
+    assert reputacion.sanciones == []
+    assert reputacion.premios == [prestamo.usuario_id]
+
+
+def test_renovar_prestamo_deshabilitado_lanza_error():
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 1, 9, 0, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+    )
+
+    with pytest.raises(ValueError, match="Renovación de préstamos no permitida"):
+        service.renovar_prestamo(prestamo.id)
 
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -21,6 +22,9 @@ from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prest
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_garantia import EstadoGarantia
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
 from prestamos_recursos.contexts.prestamos.domain.enums.tipo_checklist import TipoChecklist
+from prestamos_recursos.contexts.prestamos.domain.enums.tipo_dano_devolucion import (
+    TipoDanoDevolucion,
+)
 from prestamos_recursos.contexts.prestamos.domain.enums.tipo_garantia import TipoGarantia
 from prestamos_recursos.contexts.prestamos.domain.repositories.checklist_repository import (
     ChecklistRepository,
@@ -30,6 +34,9 @@ from prestamos_recursos.contexts.prestamos.domain.repositories.garantia_reposito
 )
 from prestamos_recursos.contexts.prestamos.domain.repositories.prestamo_repository import (
     PrestamoRepository,
+)
+from prestamos_recursos.contexts.prestamos.domain.services.plantilla_checklist import (
+    obtener_items_checklist_por_categoria,
 )
 from prestamos_recursos.contexts.prestamos.domain.value_objects.compromiso_responsabilidad import (
     CompromisoResponsabilidad,
@@ -274,19 +281,77 @@ class PrestamoService:
             raise ValueError("El préstamo no está activo")
         return prestamo
 
+    def obtener_plantilla_checklist(self, id_prestamo: UUID) -> dict[str, Any]:
+        """Determina la plantilla de checklist de entrega según la categoría del recurso."""
+        prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
+        if prestamo is None:
+            raise ValueError("Préstamo no encontrado")
+
+        categoria = ""
+        if self._recurso_repository is not None and hasattr(
+            self._recurso_repository, "obtener_por_id"
+        ):
+            recurso = self._recurso_repository.obtener_por_id(prestamo.recurso_id)
+            if recurso is not None and getattr(recurso, "categoria", None):
+                categoria = str(recurso.categoria)
+
+        return {
+            "prestamo_id": prestamo.id,
+            "recurso_id": prestamo.recurso_id,
+            "categoria": categoria,
+            "items": obtener_items_checklist_por_categoria(categoria),
+        }
+
     def procesar_devolucion(
         self,
         id_prestamo: UUID,
         observaciones_retorno: str = "Devuelto conforme",
         fotos_urls: list[str] | None = None,
         danos_detectados: bool = False,
+        tipo_dano: TipoDanoDevolucion = TipoDanoDevolucion.NINGUNO,
+        monto_dano: Decimal | None = None,
+        fecha_devolucion: datetime | None = None,
     ) -> int:
-        """Procesa la devolución de un préstamo con checklist de recepción y actualiza reputación."""
+        """Procesa la devolución de un préstamo y retorna los días de retraso."""
+        resultado = self.procesar_devolucion_detallada(
+            id_prestamo=id_prestamo,
+            observaciones_retorno=observaciones_retorno,
+            fotos_urls=fotos_urls,
+            danos_detectados=danos_detectados,
+            tipo_dano=tipo_dano,
+            monto_dano=monto_dano,
+            fecha_devolucion=fecha_devolucion,
+        )
+        return int(resultado["dias_retraso"])
+
+    def procesar_devolucion_detallada(
+        self,
+        id_prestamo: UUID,
+        observaciones_retorno: str = "Devuelto conforme",
+        fotos_urls: list[str] | None = None,
+        danos_detectados: bool = False,
+        tipo_dano: TipoDanoDevolucion = TipoDanoDevolucion.NINGUNO,
+        monto_dano: Decimal | None = None,
+        fecha_devolucion: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Procesa la devolución con tipo de daño, puntualidad exacta y reputación."""
+        tipo_efectivo = (
+            TipoDanoDevolucion.DANO_PARCIAL
+            if tipo_dano == TipoDanoDevolucion.NINGUNO and danos_detectados
+            else tipo_dano
+        )
+        if tipo_efectivo == TipoDanoDevolucion.DANO_TOTAL and (
+            monto_dano is None or monto_dano <= 0
+        ):
+            raise ValueError("Para daño total se debe indicar un monto mayor a cero")
+
         prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
         if prestamo is None:
             raise ValueError("Préstamo no encontrado")
 
-        dias_retraso = prestamo.devolver()
+        dias_retraso = prestamo.devolver(fecha_devolucion)
+        puntual = prestamo.es_devolucion_puntual()
+        hubo_danos = tipo_efectivo != TipoDanoDevolucion.NINGUNO
         self._prestamo_repository.guardar(prestamo)
 
         # Registrar inspección de recepción/devolución si el repositorio lo soporta
@@ -310,53 +375,84 @@ class PrestamoService:
                 EstadoGarantia.REGISTRADA,
                 EstadoGarantia.PENDIENTE,
             }:
-                if danos_detectados:
+                if hubo_danos:
                     garantia.retener()
                 else:
                     garantia.liberar(datetime.now(UTC))
                 if hasattr(self._garantia_repository, "guardar"):
                     self._garantia_repository.guardar(garantia)
 
-        # Liberar recurso (si hay daños, ponerlo en mantenimiento para revisión)
+        # Actualizar estado del recurso según el tipo de daño observado
         if self._recurso_repository is not None:
-            nuevo_estado = (
-                EstadoRecurso.MANTENIMIENTO if danos_detectados else EstadoRecurso.DISPONIBLE
+            estado_por_dano = {
+                TipoDanoDevolucion.NINGUNO: EstadoRecurso.DISPONIBLE,
+                TipoDanoDevolucion.DANO_PARCIAL: EstadoRecurso.MANTENIMIENTO,
+                TipoDanoDevolucion.DANO_TOTAL: EstadoRecurso.FUERA_DE_SERVICIO,
+            }
+            self._recurso_repository.actualizar_estado(
+                prestamo.recurso_id, estado_por_dano[tipo_efectivo]
             )
-            self._recurso_repository.actualizar_estado(prestamo.recurso_id, nuevo_estado)
 
+        self._aplicar_reputacion_devolucion(
+            usuario_id=prestamo.usuario_id,
+            tipo_efectivo=tipo_efectivo,
+            monto_dano=monto_dano,
+            observaciones_retorno=observaciones_retorno,
+            dias_retraso=dias_retraso,
+            puntual=puntual,
+        )
+
+        return {
+            "dias_retraso": dias_retraso,
+            "puntual": puntual,
+            "tipo_dano": tipo_efectivo.value,
+        }
+
+    def _aplicar_reputacion_devolucion(
+        self,
+        usuario_id: UUID,
+        tipo_efectivo: TipoDanoDevolucion,
+        monto_dano: Decimal | None,
+        observaciones_retorno: str,
+        dias_retraso: int,
+        puntual: bool,
+    ) -> None:
         if self._reputacion_service is None:
-            return dias_retraso
+            return
 
-        # Aplicar sanción por daño físico si fue detectado en la inspección
-        if danos_detectados and hasattr(self._reputacion_service, "aplicar_sancion"):
-            self._reputacion_service.aplicar_sancion(
-                prestamo.usuario_id,
-                TipoSancion.DANO_PARCIAL,
-                motivo=f"Daños físicos en recepción: {observaciones_retorno}",
-            )
-
-        # Penalización o premio por puntualidad
-        if dias_retraso == 0:
-            if not danos_detectados and hasattr(self._reputacion_service, "premiar_devolucion_puntual"):
-                self._reputacion_service.premiar_devolucion_puntual(prestamo.usuario_id)
-        else:
-            if hasattr(self._reputacion_service, "aplicar_sancion"):
+        if hasattr(self._reputacion_service, "aplicar_sancion"):
+            if tipo_efectivo == TipoDanoDevolucion.DANO_PARCIAL:
                 self._reputacion_service.aplicar_sancion(
-                    prestamo.usuario_id,
+                    usuario_id,
+                    TipoSancion.DANO_PARCIAL,
+                    motivo=f"Daños físicos en recepción: {observaciones_retorno}",
+                )
+            elif tipo_efectivo == TipoDanoDevolucion.DANO_TOTAL:
+                self._reputacion_service.aplicar_sancion(
+                    usuario_id,
+                    TipoSancion.DANO_TOTAL,
+                    motivo=f"Daño total en recepción: {observaciones_retorno}",
+                    monto_opcional=monto_dano,
+                )
+
+            if dias_retraso > 0:
+                self._reputacion_service.aplicar_sancion(
+                    usuario_id,
                     TipoSancion.TARDANZA,
                     motivo="Devolución tardía",
                     dias_retardo=dias_retraso,
                 )
-        return dias_retraso
+
+        if (
+            puntual
+            and tipo_efectivo == TipoDanoDevolucion.NINGUNO
+            and hasattr(self._reputacion_service, "premiar_devolucion_puntual")
+        ):
+            self._reputacion_service.premiar_devolucion_puntual(usuario_id)
 
     def renovar_prestamo(self, id_prestamo: UUID) -> bool:
-        """Renueva un préstamo activo extendiendo su fecha de fin por 7 días."""
-        prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
-        if prestamo is None:
-            raise ValueError("Préstamo no encontrado")
-        prestamo.renovar(dias=7)
-        self._prestamo_repository.guardar(prestamo)
-        return True
+        """Las renovaciones de préstamos están deshabilitadas por política operativa."""
+        raise ValueError("Renovación de préstamos no permitida")
 
     def validar_reglas_negocio(self) -> bool:
         """Placeholder para validar reglas de negocio del préstamo."""

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID, uuid4
 
 from prestamos_recursos.contexts.catalogo.application.dto.recurso_dto import RecursoDTO
 from prestamos_recursos.contexts.catalogo.domain.entities import Recurso
 from prestamos_recursos.contexts.catalogo.domain.enums import EstadoRecurso
-from prestamos_recursos.contexts.catalogo.domain.repositories.recurso_repository import RecursoRepository
+from prestamos_recursos.contexts.catalogo.domain.repositories.recurso_repository import (
+    RecursoRepository,
+)
 from prestamos_recursos.contexts.catalogo.domain.value_objects import FichaTecnica
 
 
@@ -20,12 +23,13 @@ class RecursoApplicationService:
         nombre: str,
         descripcion: str,
         categoria: str,
-        marca: str,
-        modelo: str,
-        numero_serie: str,
-        color: str,
-        estado_fisico: str,
-        foto_url: str,
+        marca: str | None = None,
+        modelo: str | None = None,
+        numero_serie: str | None = None,
+        color: str | None = None,
+        estado_fisico: str = "",
+        foto_url: str = "",
+        especificaciones: dict[str, Any] | None = None,
     ) -> UUID:
         ficha = FichaTecnica(
             marca=marca,
@@ -34,6 +38,7 @@ class RecursoApplicationService:
             color=color,
             estado_fisico=estado_fisico,
             foto_url=foto_url,
+            especificaciones=dict(especificaciones or {}),
         )
         if not ficha.es_valida():
             raise ValueError("La ficha técnica proporcionada no es válida.")
@@ -53,57 +58,15 @@ class RecursoApplicationService:
         recurso = self._recurso_repository.obtener_por_id(id_recurso)
         if not recurso:
             return None
-        return RecursoDTO(
-            id=recurso.id,
-            nombre=recurso.nombre,
-            descripcion=recurso.descripcion,
-            categoria=recurso.categoria,
-            estado=recurso.estado,
-            marca=recurso.ficha_tecnica.marca,
-            modelo=recurso.ficha_tecnica.modelo,
-            numero_serie=recurso.ficha_tecnica.numero_serie,
-            color=recurso.ficha_tecnica.color,
-            estado_fisico=recurso.ficha_tecnica.estado_fisico,
-            foto_url=recurso.ficha_tecnica.foto_url,
-        )
+        return self._to_dto(recurso)
 
     def buscar(self, filtro: str = "") -> list[RecursoDTO]:
         recursos = self._recurso_repository.buscar(filtro)
-        return [
-            RecursoDTO(
-                id=r.id,
-                nombre=r.nombre,
-                descripcion=r.descripcion,
-                categoria=r.categoria,
-                estado=r.estado,
-                marca=r.ficha_tecnica.marca,
-                modelo=r.ficha_tecnica.modelo,
-                numero_serie=r.ficha_tecnica.numero_serie,
-                color=r.ficha_tecnica.color,
-                estado_fisico=r.ficha_tecnica.estado_fisico,
-                foto_url=r.ficha_tecnica.foto_url,
-            )
-            for r in recursos
-        ]
+        return [self._to_dto(r) for r in recursos]
 
     def buscar_disponibles(self, categoria: str | None = None) -> list[RecursoDTO]:
         recursos = self._recurso_repository.buscar_disponibles(categoria or "")
-        return [
-            RecursoDTO(
-                id=r.id,
-                nombre=r.nombre,
-                descripcion=r.descripcion,
-                categoria=r.categoria,
-                estado=r.estado,
-                marca=r.ficha_tecnica.marca,
-                modelo=r.ficha_tecnica.modelo,
-                numero_serie=r.ficha_tecnica.numero_serie,
-                color=r.ficha_tecnica.color,
-                estado_fisico=r.ficha_tecnica.estado_fisico,
-                foto_url=r.ficha_tecnica.foto_url,
-            )
-            for r in recursos
-        ]
+        return [self._to_dto(r) for r in recursos]
 
     def actualizar_recurso(
         self,
@@ -111,12 +74,13 @@ class RecursoApplicationService:
         nombre: str,
         descripcion: str,
         categoria: str,
-        marca: str,
-        modelo: str,
-        numero_serie: str,
-        color: str,
-        estado_fisico: str,
-        foto_url: str,
+        marca: str | None = None,
+        modelo: str | None = None,
+        numero_serie: str | None = None,
+        color: str | None = None,
+        estado_fisico: str = "",
+        foto_url: str = "",
+        especificaciones: dict[str, Any] | None = None,
     ) -> RecursoDTO:
         recurso = self._recurso_repository.obtener_por_id(id_recurso)
         if not recurso:
@@ -128,6 +92,7 @@ class RecursoApplicationService:
             color=color,
             estado_fisico=estado_fisico,
             foto_url=foto_url,
+            especificaciones=dict(especificaciones or {}),
         )
         if not ficha.es_valida():
             raise ValueError("La ficha técnica proporcionada no es válida.")
@@ -136,19 +101,7 @@ class RecursoApplicationService:
         recurso.categoria = categoria
         recurso.ficha_tecnica = ficha
         self._recurso_repository.guardar(recurso)
-        return RecursoDTO(
-            id=recurso.id,
-            nombre=recurso.nombre,
-            descripcion=recurso.descripcion,
-            categoria=recurso.categoria,
-            estado=recurso.estado,
-            marca=ficha.marca,
-            modelo=ficha.modelo,
-            numero_serie=ficha.numero_serie,
-            color=ficha.color,
-            estado_fisico=ficha.estado_fisico,
-            foto_url=ficha.foto_url,
-        )
+        return self._to_dto(recurso)
 
     def actualizar_estado(self, id_recurso: UUID, nuevo_estado: EstadoRecurso) -> None:
         recurso = self._recurso_repository.obtener_por_id(id_recurso)
@@ -165,6 +118,24 @@ class RecursoApplicationService:
 
     def obtener_ficha_tecnica(self, id_recurso: UUID) -> RecursoDTO | None:
         return self.obtener_por_id(id_recurso)
+
+    @staticmethod
+    def _to_dto(recurso: Recurso) -> RecursoDTO:
+        ficha = recurso.ficha_tecnica
+        return RecursoDTO(
+            id=recurso.id,
+            nombre=recurso.nombre,
+            descripcion=recurso.descripcion,
+            categoria=recurso.categoria,
+            estado=recurso.estado,
+            marca=ficha.marca,
+            modelo=ficha.modelo,
+            numero_serie=ficha.numero_serie,
+            color=ficha.color,
+            estado_fisico=ficha.estado_fisico,
+            foto_url=ficha.foto_url,
+            especificaciones=dict(ficha.especificaciones),
+        )
 
 
 RecursoService = RecursoApplicationService

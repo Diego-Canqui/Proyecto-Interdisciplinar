@@ -12,8 +12,9 @@ import {
   cancelarPrestamo,
   completarEntrega,
   consultarInspeccion,
+  devolverPrestamo,
   listarTodosPrestamos,
-  registrarDevolucion,
+  obtenerPlantillaChecklist,
 } from "../api.js";
 
 const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
@@ -72,16 +73,15 @@ export default function VentanillaPage() {
   // Modal Entrega / Checklist Salida
   const [prestamoParaEntrega, setPrestamoParaEntrega] = useState(null);
   const [enviandoEntrega, setEnviandoEntrega] = useState(false);
+  const [cargandoPlantilla, setCargandoPlantilla] = useState(false);
+  const [plantillaChecklist, setPlantillaChecklist] = useState([]);
+  const [elementosChecklist, setElementosChecklist] = useState({});
   const [datosEntrega, setDatosEntrega] = useState({
     tipo_garantia: "CARNET_UNIVERSITARIO",
     compromiso_testigo: "",
     compromiso_contenido:
       "El usuario asume la total responsabilidad por la integridad y cuidado del bien entregado hasta su devolución formal.",
     compromiso_firma_url: "FIRMA_CONFORME_VENTANILLA",
-    check_carcasa: true,
-    check_pantalla: true,
-    check_cables: true,
-    check_serie: true,
     observaciones_checklist: "Equipo entregado en óptimas condiciones físicas y operativas.",
     foto_url: "",
   });
@@ -91,7 +91,8 @@ export default function VentanillaPage() {
   const [enviandoDevolucion, setEnviandoDevolucion] = useState(false);
   const [datosDevolucion, setDatosDevolucion] = useState({
     observaciones: "Devuelto completo y conforme tras verificación técnica.",
-    danos_detectados: false,
+    tipo_dano: "NINGUNO",
+    monto_dano: "",
     foto_url: "",
   });
 
@@ -235,7 +236,7 @@ export default function VentanillaPage() {
     }
   };
 
-  const abrirModalEntrega = (prestamo) => {
+  const abrirModalEntrega = async (prestamo) => {
     setError("");
     setExito("");
     setInspeccionVisualizada(null);
@@ -245,7 +246,24 @@ export default function VentanillaPage() {
       compromiso_testigo: usuario?.nombre || "Operador de Almacén",
       foto_url: "",
     }));
+    setPlantillaChecklist([]);
+    setElementosChecklist({});
     setPrestamoParaEntrega(prestamo);
+    setCargandoPlantilla(true);
+    try {
+      const plantilla = await obtenerPlantillaChecklist(prestamo.id);
+      const items = Array.isArray(plantilla?.items) ? plantilla.items : [];
+      setPlantillaChecklist(items);
+      const estadoInicial = {};
+      for (const item of items) {
+        estadoInicial[item.id] = true;
+      }
+      setElementosChecklist(estadoInicial);
+    } catch (err) {
+      setError(mensajeError(err));
+    } finally {
+      setCargandoPlantilla(false);
+    }
   };
 
   const manejarCompletarEntrega = async (e) => {
@@ -255,14 +273,16 @@ export default function VentanillaPage() {
     setExito("");
     setEnviandoEntrega(true);
 
-    const itemsMarcados = [
-      datosEntrega.check_carcasa ? "Carcasa íntegra" : "Carcasa con detalles",
-      datosEntrega.check_pantalla ? "Pantalla/Lente operativo" : "Pantalla con detalles",
-      datosEntrega.check_cables ? "Cables y accesorios completos" : "Falta cable/accesorio",
-      datosEntrega.check_serie ? "Número de serie verificado" : "Serie ilegible",
-    ].join(" | ");
+    const elementosVerificados = plantillaChecklist.map((item) =>
+      elementosChecklist[item.id] !== false
+        ? item.descripcion_ok || item.etiqueta
+        : item.descripcion_fallo || `${item.etiqueta} (con observaciones)`
+    );
 
-    const obsFinal = `${itemsMarcados}. Notas: ${datosEntrega.observaciones_checklist}`;
+    const notas = datosEntrega.observaciones_checklist.trim();
+    const obsFinal = elementosVerificados.length
+      ? `${elementosVerificados.join(" | ")}${notas ? `. Notas: ${notas}` : ""}`
+      : notas || "Entrega verificada en ventanilla.";
     const fotos = datosEntrega.foto_url.trim() ? [datosEntrega.foto_url.trim()] : [];
 
     try {
@@ -271,6 +291,7 @@ export default function VentanillaPage() {
         compromiso_contenido: datosEntrega.compromiso_contenido,
         compromiso_firma_url: datosEntrega.compromiso_firma_url,
         compromiso_testigo: datosEntrega.compromiso_testigo,
+        elementos_verificados: elementosVerificados,
         observaciones_checklist: obsFinal,
         fotos_urls: fotos,
       });
@@ -293,7 +314,8 @@ export default function VentanillaPage() {
     setPrestamoParaEntrega(null);
     setDatosDevolucion({
       observaciones: "Devuelto completo y conforme tras verificación técnica.",
-      danos_detectados: false,
+      tipo_dano: "NINGUNO",
+      monto_dano: "",
       foto_url: "",
     });
     setPrestamoParaDevolucion(prestamo);
@@ -304,25 +326,43 @@ export default function VentanillaPage() {
     if (!prestamoParaDevolucion) return;
     setError("");
     setExito("");
+
+    const esDanoTotal = datosDevolucion.tipo_dano === "DANO_TOTAL";
+    const montoNumerico = Number(datosDevolucion.monto_dano);
+    if (esDanoTotal && (!datosDevolucion.monto_dano || Number.isNaN(montoNumerico) || montoNumerico <= 0)) {
+      setError("Debes ingresar un monto de daño mayor a cero para daño total.");
+      return;
+    }
+
     setEnviandoDevolucion(true);
 
     const fotos = datosDevolucion.foto_url.trim() ? [datosDevolucion.foto_url.trim()] : [];
 
     try {
-      const res = await registrarDevolucion(prestamoParaDevolucion.id, {
+      const res = await devolverPrestamo(prestamoParaDevolucion.id, {
         observaciones: datosDevolucion.observaciones,
-        danos_detectados: datosDevolucion.danos_detectados,
+        tipo_dano: datosDevolucion.tipo_dano,
+        danos_detectados: datosDevolucion.tipo_dano !== "NINGUNO",
+        monto_dano: esDanoTotal ? montoNumerico : null,
         fotos_urls: fotos,
       });
+      const diasRetraso = typeof res?.dias_retraso === "number" ? res.dias_retraso : 0;
       let mensaje = "Devolución registrada exitosamente. ";
-      if (typeof res?.dias_retraso === "number" && res.dias_retraso > 0) {
-        mensaje += `Hubo ${res.dias_retraso} día(s) de retraso (se aplicó sanción por tardanza). `;
+      if (res?.puntual) {
+        mensaje += `Entrega puntual (0 días de retraso, +10 pts en reputación). `;
+      } else if (diasRetraso > 0) {
+        mensaje += `No puntual: hubo ${diasRetraso} día(s) de retraso (sin bono +10 pts, se aplicó sanción por tardanza). `;
       } else {
-        mensaje += "Entrega puntual (se premió la reputación del usuario). ";
-      }
-      if (datosDevolucion.danos_detectados) {
         mensaje +=
-          "Se registraron daños físicos: la garantía quedó retenida, el recurso pasó a mantenimiento y se penalizó la reputación.";
+          "No puntual: devuelto fuera de hora el mismo día (0 días de retraso, sin bono +10 pts). ";
+      }
+      if (datosDevolucion.tipo_dano === "DANO_PARCIAL") {
+        mensaje +=
+          "Se registró daño parcial: la garantía quedó retenida, el recurso pasó a mantenimiento y se penalizó la reputación.";
+      } else if (datosDevolucion.tipo_dano === "DANO_TOTAL") {
+        mensaje += `Se registró daño total (monto a cobrar: S/ ${montoNumerico.toFixed(
+          2
+        )}): la garantía quedó retenida, el recurso pasó a fuera de servicio y se penalizó la reputación.`;
       }
       setExito(mensaje);
       setPrestamoParaDevolucion(null);
@@ -562,48 +602,36 @@ export default function VentanillaPage() {
                 <legend style={{ fontWeight: "600", padding: "0 0.5rem" }}>
                   2. Checklist de inspección física (Salida)
                 </legend>
-                <div className="grilla" style={{ marginBottom: "0.75rem" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <input
-                      type="checkbox"
-                      checked={datosEntrega.check_carcasa}
-                      onChange={(e) =>
-                        setDatosEntrega({ ...datosEntrega, check_carcasa: e.target.checked })
-                      }
-                    />
-                    <span>Carcasa / Chasis íntegro</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <input
-                      type="checkbox"
-                      checked={datosEntrega.check_pantalla}
-                      onChange={(e) =>
-                        setDatosEntrega({ ...datosEntrega, check_pantalla: e.target.checked })
-                      }
-                    />
-                    <span>Pantalla / Lente operativo</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <input
-                      type="checkbox"
-                      checked={datosEntrega.check_cables}
-                      onChange={(e) =>
-                        setDatosEntrega({ ...datosEntrega, check_cables: e.target.checked })
-                      }
-                    />
-                    <span>Cables y cargador completos</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <input
-                      type="checkbox"
-                      checked={datosEntrega.check_serie}
-                      onChange={(e) =>
-                        setDatosEntrega({ ...datosEntrega, check_serie: e.target.checked })
-                      }
-                    />
-                    <span>Número de serie verificado</span>
-                  </label>
-                </div>
+                {cargandoPlantilla ? (
+                  <p className="campo__ayuda" role="status" style={{ marginBottom: "0.75rem" }}>
+                    Cargando ítems de inspección según categoría del recurso...
+                  </p>
+                ) : plantillaChecklist.length === 0 ? (
+                  <p className="campo__ayuda" style={{ marginBottom: "0.75rem" }}>
+                    No se encontraron ítems sugeridos; registra las observaciones de entrega.
+                  </p>
+                ) : (
+                  <div className="grilla" style={{ marginBottom: "0.75rem" }}>
+                    {plantillaChecklist.map((item) => (
+                      <label
+                        key={item.id}
+                        style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={elementosChecklist[item.id] !== false}
+                          onChange={(e) =>
+                            setElementosChecklist((prev) => ({
+                              ...prev,
+                              [item.id]: e.target.checked,
+                            }))
+                          }
+                        />
+                        <span>{item.etiqueta}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
 
                 <div className="campo">
                   <label className="campo__etiqueta" htmlFor="ventanilla_obs_entrega">
@@ -728,19 +756,55 @@ export default function VentanillaPage() {
                 />
               </div>
 
-              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <input
-                  type="checkbox"
-                  checked={datosDevolucion.danos_detectados}
+              <div className="campo">
+                <label className="campo__etiqueta" htmlFor="ventanilla_tipo_dano">
+                  Evaluación de daños en retorno *
+                </label>
+                <select
+                  id="ventanilla_tipo_dano"
+                  className="campo__control"
+                  value={datosDevolucion.tipo_dano}
                   onChange={(e) =>
                     setDatosDevolucion({
                       ...datosDevolucion,
-                      danos_detectados: e.target.checked,
+                      tipo_dano: e.target.value,
+                      monto_dano: e.target.value === "DANO_TOTAL" ? datosDevolucion.monto_dano : "",
                     })
                   }
-                />
-                <span>Se detectaron daños físicos (retiene garantía y pasa a mantenimiento)</span>
-              </label>
+                >
+                  <option value="NINGUNO">Sin daños (recurso disponible)</option>
+                  <option value="DANO_PARCIAL">
+                    Daño parcial (reparable — pasa a mantenimiento y retiene garantía)
+                  </option>
+                  <option value="DANO_TOTAL">
+                    Daño total / pérdida (fuera de servicio — requiere monto a cobrar)
+                  </option>
+                </select>
+              </div>
+
+              {datosDevolucion.tipo_dano === "DANO_TOTAL" && (
+                <div className="campo">
+                  <label className="campo__etiqueta" htmlFor="ventanilla_monto_dano">
+                    Monto del daño a cobrar (S/) *
+                  </label>
+                  <input
+                    id="ventanilla_monto_dano"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    className="campo__control"
+                    required
+                    value={datosDevolucion.monto_dano}
+                    onChange={(e) =>
+                      setDatosDevolucion({
+                        ...datosDevolucion,
+                        monto_dano: e.target.value,
+                      })
+                    }
+                    placeholder="Ej. 350.00"
+                  />
+                </div>
+              )}
 
               <div className="formulario__acciones">
                 <button
