@@ -416,9 +416,23 @@ export default function GestionReputacionPage() {
     if (enCurso || !seleccionado) {
       return;
     }
-    // Validación local: fin no puede ser anterior a inicio (fin == inicio sí se acepta)
+    // Validación local: fechas obligatorias válidas y fin >= inicio
+    if (!inicioExcepcion || !finExcepcion) {
+      setErrorExcepcion({
+        texto: "Completa las fechas de inicio y fin para registrar la excepción.",
+        reintentable: false,
+      });
+      return;
+    }
     const inicioMs = new Date(inicioExcepcion).getTime();
     const finMs = new Date(finExcepcion).getTime();
+    if (Number.isNaN(inicioMs) || Number.isNaN(finMs)) {
+      setErrorExcepcion({
+        texto: "Las fechas ingresadas no son válidas.",
+        reintentable: false,
+      });
+      return;
+    }
     if (finMs < inicioMs) {
       setFinInvalido(true);
       return;
@@ -838,7 +852,7 @@ export default function GestionReputacionPage() {
                                 <th scope="col">Tipo</th>
                                 <th scope="col">Motivo</th>
                                 <th scope="col">Puntos</th>
-                                {hayMonto && <th scope="col">Monto (€)</th>}
+                                {hayMonto && <th scope="col">Monto ($)</th>}
                                 <th scope="col">Fecha aplicación</th>
                                 <th scope="col">Fecha fin</th>
                                 <th scope="col">Estado</th>
@@ -851,7 +865,7 @@ export default function GestionReputacionPage() {
                                   <td data-etiqueta="Motivo">{sancion.motivo}</td>
                                   <td data-etiqueta="Puntos">{sancion.puntos_descuento}</td>
                                   {hayMonto && (
-                                    <td data-etiqueta="Monto (€)">
+                                    <td data-etiqueta="Monto ($)">
                                       {Number(sancion.monto_descuento) > 0
                                         ? sancion.monto_descuento
                                         : "—"}
@@ -1232,7 +1246,7 @@ export default function GestionReputacionPage() {
                     {tipoSancion === "DANO_TOTAL" && (
                       <div className="campo">
                         <label className="campo__label" htmlFor="sancion-monto">
-                          Monto del daño (€)
+                          Monto del daño ($)
                         </label>
                         <input
                           className="campo__control"

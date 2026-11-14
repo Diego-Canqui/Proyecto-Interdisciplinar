@@ -25,23 +25,21 @@ function fechaLocalMinima() {
   return ahora.toISOString().slice(0, 16);
 }
 
-function formatearFechaNominalUTC(fechaLocalStr) {
+function convertirLocalAUTC(fechaLocalStr) {
   if (!fechaLocalStr) return "";
-  if (fechaLocalStr.endsWith("Z")) return fechaLocalStr;
-  if (fechaLocalStr.length === 16) {
-    return `${fechaLocalStr}:00Z`;
-  }
-  return `${fechaLocalStr}Z`;
+  const fecha = new Date(fechaLocalStr);
+  if (Number.isNaN(fecha.getTime())) return "";
+  return fecha.toISOString();
 }
 
-function esHorarioAtencionValido(fechaIsoNominal) {
-  const d = new Date(fechaIsoNominal);
+function esHorarioAtencionValido(fechaLocalStr) {
+  const d = new Date(fechaLocalStr);
   if (Number.isNaN(d.getTime())) return false;
-  const diaSemana = d.getUTCDay(); // 0 = Domingo, 1 = Lunes, ..., 5 = Viernes, 6 = Sábado
+  const diaSemana = d.getDay(); // 0 = Domingo, 1 = Lunes, ..., 5 = Viernes, 6 = Sábado
   if (diaSemana < 1 || diaSemana > 5) return false;
-  const horas = d.getUTCHours();
-  const minutos = d.getUTCMinutes();
-  const segundos = d.getUTCSeconds();
+  const horas = d.getHours();
+  const minutos = d.getMinutes();
+  const segundos = d.getSeconds();
   const segundosTotales = horas * 3600 + minutos * 60 + segundos;
   if (segundosTotales < 8 * 3600 || segundosTotales > 20 * 3600) return false;
   return true;
@@ -145,8 +143,12 @@ export default function MisReservasPage() {
       return;
     }
 
-    const inicioIso = formatearFechaNominalUTC(fechaInicio);
-    const finIso = formatearFechaNominalUTC(fechaFin);
+    const inicioIso = convertirLocalAUTC(fechaInicio);
+    const finIso = convertirLocalAUTC(fechaFin);
+    if (!inicioIso || !finIso) {
+      setError("Las fechas ingresadas no son válidas.");
+      return;
+    }
     const inicio = new Date(inicioIso);
     const fin = new Date(finIso);
 
@@ -165,7 +167,7 @@ export default function MisReservasPage() {
       return;
     }
 
-    if (!esHorarioAtencionValido(inicioIso) || !esHorarioAtencionValido(finIso)) {
+    if (!esHorarioAtencionValido(fechaInicio) || !esHorarioAtencionValido(fechaFin)) {
       setError(
         "El horario de atención para entregas y devoluciones es de lunes a viernes de 08:00 a 20:00."
       );

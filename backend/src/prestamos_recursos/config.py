@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     jwt_expiracion_horas: int = Field(default=24, validation_alias="JWT_EXPIRACION_HORAS")
     bcrypt_cost: int = Field(default=12, validation_alias="BCRYPT_COST")
     cors_origins_raw: str = Field(default="http://localhost:5173", validation_alias="CORS_ORIGINS")
+    zona_horaria_negocio: str = Field(
+        default="America/Lima", validation_alias="ZONA_HORARIA_NEGOCIO"
+    )
 
     @property
     def cors_origins(self) -> list[str]:

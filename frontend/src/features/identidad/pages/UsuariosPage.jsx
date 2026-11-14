@@ -148,7 +148,7 @@ export default function UsuariosPage() {
       await crearUsuario({
         nombre,
         correo,
-        telefono,
+        ...(telefono.trim() ? { telefono: telefono.trim() } : {}),
         password,
         roles: [rol],
       });
@@ -289,7 +289,7 @@ export default function UsuariosPage() {
 
                 <div className="campo">
                   <label className="campo__etiqueta" htmlFor="usuario-telefono">
-                    Teléfono
+                    Teléfono (opcional)
                   </label>
                   <input
                     className="campo__control"
@@ -298,7 +298,6 @@ export default function UsuariosPage() {
                     placeholder="Número de teléfono"
                     value={telefono}
                     onChange={(e) => setTelefono(e.target.value)}
-                    required
                   />
                 </div>
 
