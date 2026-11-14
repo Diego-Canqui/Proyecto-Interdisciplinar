@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from prestamos_recursos.contexts.reservas.domain.enums.estado_reserva import EstadoReserva
 from prestamos_recursos.shared.base_entity import BaseEntity
@@ -28,11 +29,14 @@ class Reserva(BaseEntity):
         if self.fecha_fin <= self.fecha_inicio:
             raise ValueError("la fecha de fin debe ser posterior a la fecha de inicio")
 
-    @staticmethod
-    def _validar_horario_atencion(fecha: datetime) -> None:
-        hora_nominal = fecha.time().replace(tzinfo=None)
+    @classmethod
+    def _validar_horario_atencion(
+        cls, fecha: datetime, zona_horaria: str | None = None
+    ) -> None:
+        fecha_ref = cls._a_utc(fecha).astimezone(ZoneInfo(zona_horaria)) if zona_horaria else fecha
+        hora_nominal = fecha_ref.time().replace(tzinfo=None)
         if (
-            fecha.weekday() >= 5
+            fecha_ref.weekday() >= 5
             or hora_nominal < HORA_APERTURA_VENTANILLA
             or hora_nominal > HORA_CIERRE_VENTANILLA
         ):
@@ -47,6 +51,7 @@ class Reserva(BaseEntity):
         recurso_id: UUID,
         fecha_inicio: datetime,
         fecha_fin: datetime,
+        zona_horaria: str | None = None,
     ) -> Reserva:
         duracion = cls._a_utc(fecha_fin) - cls._a_utc(fecha_inicio)
         if duracion <= timedelta(0):
@@ -56,8 +61,8 @@ class Reserva(BaseEntity):
         if duracion > DURACION_MAXIMA_RESERVA:
             raise ValueError("la duración máxima de una reserva es de 7 días")
 
-        cls._validar_horario_atencion(fecha_inicio)
-        cls._validar_horario_atencion(fecha_fin)
+        cls._validar_horario_atencion(fecha_inicio, zona_horaria=zona_horaria)
+        cls._validar_horario_atencion(fecha_fin, zona_horaria=zona_horaria)
 
         return cls(
             usuario_id=usuario_id,

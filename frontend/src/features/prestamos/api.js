@@ -8,13 +8,16 @@ export const registrarDevolucion = (idPrestamo, datosDevolucion = null) =>
     ? apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/devolucion`, datosDevolucion)
     : apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/devolucion`);
 
+export const devolverPrestamo = (idPrestamo, datos) =>
+  registrarDevolucion(idPrestamo, datos);
+
+export const obtenerPlantillaChecklist = (idPrestamo) =>
+  apiClient.get(`/prestamos/${encodeURIComponent(idPrestamo)}/checklist-plantilla`);
+
 export const consultarHistorial = (idUsuario) =>
   apiClient.get(`/prestamos/usuarios/${encodeURIComponent(idUsuario)}/historial`);
 
 export const listarTodosPrestamos = () => apiClient.get("/prestamos");
-
-export const renovarPrestamo = (idPrestamo) =>
-  apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/renovar`);
 
 export const iniciarEntrega = (idPrestamo, datosEntrega) =>
   apiClient.post(`/prestamos/${encodeURIComponent(idPrestamo)}/entrega/iniciar`, datosEntrega);

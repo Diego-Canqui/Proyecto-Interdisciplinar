@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from prestamos_recursos.config import settings
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
     NivelReputacion,
 )
@@ -192,7 +193,10 @@ class ReservaService:
         self._verificar_elegibilidad_usuario(datos.usuario_id)
         self._verificar_recurso_operativo(datos.recurso_id)
         self._validar_ventana_temporal_creacion(datos.fecha_inicio, ahora)
-        reserva = Reserva.crear(**datos.model_dump())
+        reserva = Reserva.crear(
+            **datos.model_dump(),
+            zona_horaria=settings.zona_horaria_negocio,
+        )
         reservas_activas = self._reserva_repository.obtener_activas_por_recurso(
             reserva.recurso_id
         )

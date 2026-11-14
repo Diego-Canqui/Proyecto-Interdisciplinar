@@ -217,6 +217,8 @@ def test_ciclo_entrega_endpoints_completo():
         "detalle": "Devolución registrada",
         "estado": EstadoPrestamo.DEVUELTO.value,
         "dias_retraso": 0,
+        "puntual": True,
+        "tipo_dano": "NINGUNO",
     }
     assert prestamo.estado == EstadoPrestamo.DEVUELTO
     assert recurso_repository.estado == EstadoRecurso.DISPONIBLE
@@ -369,13 +371,14 @@ def test_listar_todos_prestamos_sin_token_retorna_401():
 @pytest.mark.e2e
 def test_renovar_prestamo_activo():
     ahora = datetime.now(UTC)
+    fecha_fin_original = ahora + timedelta(days=5)
     prestamo = Prestamo(
         reserva_id=uuid4(),
         recurso_id=uuid4(),
         usuario_id=uuid4(),
         fecha_inicio=ahora,
-        fecha_fin=ahora + timedelta(days=5),
-        estado=EstadoPrestamo.ACTIVO,
+        fecha_fin=fecha_fin_original,
+        estado=EstadoPrestamo.ENTREGADO,
     )
     repo = FakePrestamoRepository([prestamo])
     service = PrestamoService(
@@ -389,9 +392,9 @@ def test_renovar_prestamo_activo():
     )
 
     response = client.post(f"/prestamos/{prestamo.id}/renovar")
-    assert response.status_code == 200
-    assert "renovado exitosamente" in response.json()["detalle"]
-    assert prestamo.fecha_fin > ahora + timedelta(days=10)
+    assert response.status_code == 410
+    assert response.json()["detail"] == "Renovación de préstamos no permitida"
+    assert prestamo.fecha_fin == fecha_fin_original
 
 
 @pytest.mark.e2e
@@ -676,7 +679,7 @@ def test_inspeccion_seguridad_401_404_403_y_titular_200():
         usuario_id=titular_id,
         fecha_inicio=ahora,
         fecha_fin=ahora + timedelta(days=3),
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.ENTREGADO,
     )
     service = PrestamoService(
         prestamo_repository=FakePrestamoRepository([prestamo]),
@@ -715,7 +718,7 @@ def test_renovar_seguridad_401_404_403_y_gestion_200():
         usuario_id=titular_id,
         fecha_inicio=ahora,
         fecha_fin=ahora + timedelta(days=3),
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.ENTREGADO,
     )
     service = PrestamoService(
         prestamo_repository=FakePrestamoRepository([prestamo]),
@@ -727,20 +730,20 @@ def test_renovar_seguridad_401_404_403_y_gestion_200():
     # Sin token -> 401
     assert client.post(f"/prestamos/{prestamo.id}/renovar").status_code == 401
 
-    # Préstamo inexistente -> 404
+    # Cualquier usuario autenticado -> 410 Gone
     app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
         otro_id, [RolUsuario.ESTUDIANTE]
     )
-    assert client.post(f"/prestamos/{uuid4()}/renovar").status_code == 404
+    res_otro = client.post(f"/prestamos/{prestamo.id}/renovar")
+    assert res_otro.status_code == 410
+    assert res_otro.json()["detail"] == "Renovación de préstamos no permitida"
 
-    # Otro estudiante -> 403
-    assert client.post(f"/prestamos/{prestamo.id}/renovar").status_code == 403
-
-    # Gestor -> 200
     app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
         uuid4(), [RolUsuario.GESTOR_ALMACEN]
     )
-    assert client.post(f"/prestamos/{prestamo.id}/renovar").status_code == 200
+    res_gestor = client.post(f"/prestamos/{prestamo.id}/renovar")
+    assert res_gestor.status_code == 410
+    assert res_gestor.json()["detail"] == "Renovación de préstamos no permitida"
 
 
 @pytest.mark.e2e
@@ -820,6 +823,133 @@ def test_respuestas_api_exponen_fechas_reales_tras_entrega_y_devolucion():
     item_devuelto = res_historial.json()[0]
     assert item_devuelto["fecha_entrega_real"] is not None
     assert item_devuelto["fecha_devolucion_real"] is not None
+
+
+@pytest.mark.e2e
+def test_obtener_checklist_plantilla_por_categoria_y_seguridad():
+    ahora = datetime.now(UTC)
+    recurso_id = uuid4()
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_id,
+        usuario_id=uuid4(),
+        fecha_inicio=ahora,
+        fecha_fin=ahora + timedelta(days=3),
+        estado=EstadoPrestamo.ACTIVO,
+    )
+    recurso_repo = SimpleNamespace(
+        obtener_por_id=lambda _id: SimpleNamespace(id=recurso_id, categoria="Libros"),
+        actualizar_estado=lambda *_args: None,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+        catalogo_service=recurso_repo,
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+
+    # Sin token -> 401
+    assert client.get(f"/prestamos/{prestamo.id}/checklist-plantilla").status_code == 401
+
+    # Estudiante -> 403
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.ESTUDIANTE]
+    )
+    assert client.get(f"/prestamos/{prestamo.id}/checklist-plantilla").status_code == 403
+
+    # Gestor -> 200 con ítems de Libros
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+    res = client.get(f"/prestamos/{prestamo.id}/checklist-plantilla")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["categoria"] == "Libros"
+    assert any(item["id"] == "paginas" for item in data["items"])
+
+    # Préstamo inexistente -> 404
+    assert client.get(f"/prestamos/{uuid4()}/checklist-plantilla").status_code == 404
+
+
+@pytest.mark.e2e
+def test_devolucion_dano_parcial_y_dano_total_validacion_422_e2e():
+    ahora = datetime.now(UTC)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=ahora - timedelta(days=1),
+        fecha_fin=ahora + timedelta(days=2),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    recurso_repo = FakeRecursoRepository()
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+        recurso_repository=recurso_repo,
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+
+    # DANO_TOTAL sin monto -> 422
+    res_invalido = client.post(
+        f"/prestamos/{prestamo.id}/devolucion",
+        json={"observaciones": "Pérdida total", "tipo_dano": "DANO_TOTAL"},
+    )
+    assert res_invalido.status_code == 422
+    assert prestamo.estado == EstadoPrestamo.ENTREGADO
+
+    # DANO_TOTAL con monto > 0 -> 200
+    res_valido = client.post(
+        f"/prestamos/{prestamo.id}/devolucion",
+        json={
+            "observaciones": "Pérdida total",
+            "tipo_dano": "DANO_TOTAL",
+            "monto_dano": 350.0,
+        },
+    )
+    assert res_valido.status_code == 200
+    assert res_valido.json()["tipo_dano"] == "DANO_TOTAL"
+    assert recurso_repo.estado == EstadoRecurso.FUERA_DE_SERVICIO
+
+
+@pytest.mark.e2e
+def test_devolucion_mismo_dia_tarde_retorna_puntual_false_y_dias_retraso_cero():
+    ahora = datetime.now(UTC)
+    inicio_hoy = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Garantizar que fecha_fin sea hoy pero anterior a ahora (si es 00:00:00, restamos 1 segundo)
+    fin_hoy = ahora - timedelta(seconds=5)
+    if fin_hoy.date() != ahora.date():
+        fin_hoy = inicio_hoy + timedelta(seconds=1)
+    prestamo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=uuid4(),
+        usuario_id=uuid4(),
+        fecha_inicio=inicio_hoy - timedelta(days=1),
+        fecha_fin=fin_hoy,
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    service = PrestamoService(
+        prestamo_repository=FakePrestamoRepository([prestamo]),
+        checklist_repository=FakeChecklistRepository(),
+        garantia_repository=FakeGarantiaRepository(),
+        recurso_repository=FakeRecursoRepository(),
+    )
+    app.dependency_overrides[get_prestamo_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: _crear_usuario(
+        uuid4(), [RolUsuario.GESTOR_ALMACEN]
+    )
+
+    res = client.post(f"/prestamos/{prestamo.id}/devolucion")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["dias_retraso"] == 0
+    assert body["puntual"] is False
+    assert body["tipo_dano"] == "NINGUNO"
 
 
 

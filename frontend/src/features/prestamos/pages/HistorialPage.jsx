@@ -5,11 +5,9 @@ import { obtenerPerfil } from "../../identidad/api.js";
 import {
   consultarHistorial,
   consultarInspeccion,
-  renovarPrestamo,
 } from "../api.js";
 
 const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
-const ESTADOS_RENOVABLES = new Set(["ACTIVO", "ENTREGADO"]);
 
 const CLASE_ESTADO_PRESTAMO = {
   ACTIVO: "insignia--info",
@@ -46,10 +44,8 @@ export default function HistorialPage() {
   const [prestamos, setPrestamos] = useState([]);
   const [recursos, setRecursos] = useState([]);
   const [cargando, setCargando] = useState(true);
-  const [renovandoId, setRenovandoId] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("TODOS");
   const [error, setError] = useState("");
-  const [exito, setExito] = useState("");
 
   const [inspeccionVisualizada, setInspeccionVisualizada] = useState(null);
   const [cargandoInspeccion, setCargandoInspeccion] = useState(false);
@@ -69,11 +65,6 @@ export default function HistorialPage() {
     }
     return prestamos.filter((p) => p.estado === filtroEstado);
   }, [prestamos, filtroEstado]);
-
-  const cargarHistorial = async (perfilActual) => {
-    const datos = await consultarHistorial(perfilActual.id);
-    setPrestamos(datos);
-  };
 
   useEffect(() => {
     let vigente = true;
@@ -130,21 +121,6 @@ export default function HistorialPage() {
     }
   };
 
-  const manejarRenovacion = async (idPrestamo) => {
-    setError("");
-    setExito("");
-    setRenovandoId(idPrestamo);
-    try {
-      await renovarPrestamo(idPrestamo);
-      await cargarHistorial(usuario);
-      setExito("Préstamo renovado exitosamente por 7 días.");
-    } catch (err) {
-      setError(mensajeError(err));
-    } finally {
-      setRenovandoId("");
-    }
-  };
-
   if (cargando) {
     return (
       <p className="cargando" role="status">
@@ -196,11 +172,6 @@ export default function HistorialPage() {
       {error && (
         <div className="alerta alerta--error" role="alert" style={{ marginBottom: "1rem" }}>
           {error}
-        </div>
-      )}
-      {exito && (
-        <div className="alerta alerta--exito" role="status" style={{ marginBottom: "1rem" }}>
-          {exito}
         </div>
       )}
 
@@ -325,7 +296,6 @@ export default function HistorialPage() {
             <tbody>
               {prestamosFiltrados.map((prestamo) => {
                 const recurso = recursosPorId.get(prestamo.recurso_id);
-                const puedeRenovar = ESTADOS_RENOVABLES.has(prestamo.estado);
 
                 return (
                   <tr key={prestamo.id}>
@@ -361,21 +331,11 @@ export default function HistorialPage() {
                         <button
                           type="button"
                           className="boton boton--fantasma boton--sm"
-                          disabled={cargandoInspeccion || Boolean(renovandoId)}
+                          disabled={cargandoInspeccion}
                           onClick={() => verInspeccion(prestamo.id)}
                         >
                           Checklist
                         </button>
-                        {puedeRenovar && (
-                          <button
-                            type="button"
-                            className="boton boton--secundario boton--sm"
-                            disabled={Boolean(renovandoId)}
-                            onClick={() => manejarRenovacion(prestamo.id)}
-                          >
-                            {renovandoId === prestamo.id ? "Renovando..." : "Renovar"}
-                          </button>
-                        )}
                       </div>
                     </td>
                   </tr>

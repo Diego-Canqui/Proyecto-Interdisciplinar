@@ -1,6 +1,7 @@
 """«Boundary» PrestamoController."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +19,9 @@ from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies 
 )
 from prestamos_recursos.contexts.prestamos.application.dto.prestamo_dto import PrestamoDTO
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
+from prestamos_recursos.contexts.prestamos.domain.enums.tipo_dano_devolucion import (
+    TipoDanoDevolucion,
+)
 from prestamos_recursos.contexts.prestamos.domain.enums.tipo_garantia import TipoGarantia
 from prestamos_recursos.contexts.prestamos.domain.value_objects.compromiso_responsabilidad import (
     CompromisoResponsabilidad,
@@ -80,6 +84,21 @@ class DevolucionDTO(BaseModel):
     observaciones: str = "Devuelto conforme"
     fotos_urls: list[str] = Field(default_factory=list)
     danos_detectados: bool = False
+    tipo_dano: TipoDanoDevolucion = TipoDanoDevolucion.NINGUNO
+    monto_dano: Decimal | None = None
+
+
+@router.get("/{id_prestamo}/checklist-plantilla")
+def obtener_plantilla_checklist(
+    id_prestamo: UUID,
+    _usuario: UsuarioDTO = Depends(_solo_gestion),  # noqa: B008
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
+) -> dict:
+    """Obtiene la plantilla de checklist de entrega según la categoría del recurso."""
+    try:
+        return service.obtener_plantilla_checklist(id_prestamo)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{id_prestamo}/entrega/iniciar")
@@ -206,40 +225,42 @@ def registrar_devolucion(
     obs = data.observaciones if data else "Devuelto conforme"
     fotos = data.fotos_urls if data else []
     danos = data.danos_detectados if data else False
+    tipo_dano = data.tipo_dano if data else TipoDanoDevolucion.NINGUNO
+    monto_dano = data.monto_dano if data else None
     try:
-        dias_retraso = service.procesar_devolucion(
+        resultado = service.procesar_devolucion_detallada(
             id_prestamo=id_prestamo,
             observaciones_retorno=obs,
             fotos_urls=fotos,
             danos_detectados=danos,
+            tipo_dano=tipo_dano,
+            monto_dano=monto_dano,
         )
     except ValueError as exc:
-        status_code = 404 if str(exc) == "Préstamo no encontrado" else 409
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        mensaje = str(exc)
+        if mensaje == "Préstamo no encontrado":
+            status_code = 404
+        elif "monto mayor a cero" in mensaje:
+            status_code = 422
+        else:
+            status_code = 409
+        raise HTTPException(status_code=status_code, detail=mensaje) from exc
     return {
         "detalle": "Devolución registrada",
         "estado": "DEVUELTO",
-        "dias_retraso": dias_retraso,
+        "dias_retraso": resultado["dias_retraso"],
+        "puntual": resultado["puntual"],
+        "tipo_dano": resultado["tipo_dano"],
     }
 
 
 @router.post("/{id_prestamo}/renovar")
 def renovar_prestamo(
     id_prestamo: UUID,
-    usuario: UsuarioDTO = Depends(get_current_user),  # noqa: B008
-    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
+    _usuario: UsuarioDTO = Depends(get_current_user),  # noqa: B008
 ) -> dict:
-    """Renueva un préstamo activo extendiendo el plazo de devolución."""
-    prestamo = service.obtener_prestamo(id_prestamo)
-    if prestamo is None:
-        raise HTTPException(status_code=404, detail="Préstamo no encontrado")
-    _validar_titular_o_gestion(usuario, prestamo.usuario_id)
-    try:
-        service.renovar_prestamo(id_prestamo)
-    except ValueError as exc:
-        status_code = 404 if str(exc) == "Préstamo no encontrado" else 400
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-    return {"detalle": "Préstamo renovado exitosamente por 7 días"}
+    """Renovación de préstamos deshabilitada por política operativa."""
+    raise HTTPException(status_code=410, detail="Renovación de préstamos no permitida")
 
 
 @router.post("/{id_prestamo}/cancelar")

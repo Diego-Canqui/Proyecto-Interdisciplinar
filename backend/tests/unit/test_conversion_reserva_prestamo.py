@@ -364,7 +364,7 @@ def test_prioridad_puntaje_por_defecto():
 def _horario_futuro(horas_inicio: float = 24, duracion_horas: float = 2):
     ahora = datetime.now(timezone.utc)
     candidato = (ahora + timedelta(hours=horas_inicio)).replace(
-        hour=10, minute=0, second=0, microsecond=0
+        hour=15, minute=0, second=0, microsecond=0
     )
     while candidato.weekday() >= 5:
         candidato += timedelta(days=1)
@@ -706,6 +706,35 @@ def test_reserva_crear_rechaza_fuera_de_horario_atencion():
     assert r_multidia.fecha_fin == lunes_sgte
 
 
+def test_reserva_crear_valida_horario_en_zona_horaria_negocio():
+    u_id = uuid4()
+    r_id = uuid4()
+    # 10:00 UTC = 05:00 America/Lima -> fuera de horario (08:00-20:00)
+    lunes_10_utc = datetime(2026, 11, 2, 10, 0, tzinfo=timezone.utc)
+    with pytest.raises(
+        ValueError,
+        match="el horario de atención para entregas y devoluciones es de lunes a viernes de 08:00 a 20:00",
+    ):
+        Reserva.crear(
+            usuario_id=u_id,
+            recurso_id=r_id,
+            fecha_inicio=lunes_10_utc,
+            fecha_fin=lunes_10_utc + timedelta(hours=2),
+            zona_horaria="America/Lima",
+        )
+
+    # 15:00 UTC = 10:00 America/Lima -> dentro de horario (08:00-20:00)
+    lunes_15_utc = datetime(2026, 11, 2, 15, 0, tzinfo=timezone.utc)
+    r_ok = Reserva.crear(
+        usuario_id=u_id,
+        recurso_id=r_id,
+        fecha_inicio=lunes_15_utc,
+        fecha_fin=lunes_15_utc + timedelta(hours=2),
+        zona_horaria="America/Lima",
+    )
+    assert r_ok.fecha_inicio == lunes_15_utc
+
+
 def test_reserva_crear_rechaza_duracion_menor_a_1_hora():
     u_id = uuid4()
     r_id = uuid4()
@@ -941,9 +970,9 @@ def test_crear_reserva_rechaza_fecha_en_el_pasado_y_permite_tolerancia_5_min():
     service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()))
     u_id = uuid4()
     r_id = uuid4()
-    ahora_fijo = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
+    ahora_fijo = datetime(2026, 11, 2, 15, 0, tzinfo=timezone.utc)
 
-    # 11:50 es > 5 minutos en el pasado -> ValueError
+    # 14:50 es > 5 minutos en el pasado -> ValueError
     datos_pasado = CrearReservaDTO(
         usuario_id=u_id,
         recurso_id=r_id,
@@ -953,7 +982,7 @@ def test_crear_reserva_rechaza_fecha_en_el_pasado_y_permite_tolerancia_5_min():
     with pytest.raises(ValueError, match="no se pueden crear reservas en el pasado"):
         service.crear_reserva(datos_pasado, ahora=ahora_fijo)
 
-    # 11:58 está dentro de la tolerancia de 5 minutos -> permitido
+    # 14:58 está dentro de la tolerancia de 5 minutos -> permitido
     datos_tolerancia = CrearReservaDTO(
         usuario_id=u_id,
         recurso_id=r_id,
@@ -1009,7 +1038,7 @@ def test_crear_reserva_rechaza_recurso_mantenimiento_o_fuera_de_servicio_y_permi
         make_prestamo_service(FakePrestamoRepository()),
         catalogo_service=FakeCatalogoService(),
     )
-    ahora_fijo = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
+    ahora_fijo = datetime(2026, 11, 2, 15, 0, tzinfo=timezone.utc)
     inicio = ahora_fijo + timedelta(days=1)
     fin = inicio + timedelta(hours=2)
 

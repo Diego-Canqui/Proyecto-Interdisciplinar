@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
@@ -56,16 +56,29 @@ class Prestamo(BaseEntity):
         dias = (fecha.date() - fin.date()).days
         return max(0, dias)
 
+    def es_devolucion_puntual(self, fecha_referencia: datetime | None = None) -> bool:
+        """Indica si la devolución ocurre en o antes de la fecha y hora límite pactadas."""
+        referencia = (
+            fecha_referencia
+            if fecha_referencia is not None
+            else (self.fecha_devolucion_real or datetime.now(UTC))
+        )
+        return _ensure_utc(referencia) <= _ensure_utc(self.fecha_fin)
+
     def devolver(self, fecha_devolucion: datetime | None = None) -> int:
         """
         Procesa la devolución del préstamo.
-        Solo se puede devolver si está ACTIVO o VENCIDO.
+        Solo se puede devolver si está ENTREGADO o VENCIDO.
         Retorna los días de retraso (0 si fue a tiempo o anticipado).
         """
         if self.estado == EstadoPrestamo.DEVUELTO:
             raise ValueError("El préstamo ya fue devuelto")
         if self.estado == EstadoPrestamo.CANCELADO:
             raise ValueError("No se puede devolver un préstamo cancelado")
+        if self.estado == EstadoPrestamo.ACTIVO:
+            raise ValueError(
+                "No se puede devolver un préstamo pendiente de entrega física (ACTIVO)"
+            )
 
         fecha = _ensure_utc(fecha_devolucion) if fecha_devolucion is not None else datetime.now(UTC)
         dias_retraso = self.calcular_dias_retraso(fecha)
@@ -90,11 +103,11 @@ class Prestamo(BaseEntity):
     def solicitar_prorroga(self, dias: int = 7, fecha_actual: datetime | None = None) -> bool:
         """
         Determina si el préstamo es apto para solicitar una prórroga.
-        Debe estar ACTIVO o ENTREGADO y dentro de la fecha límite.
+        Debe estar ENTREGADO y dentro de la fecha límite.
         """
         if dias <= 0:
             return False
-        if self.estado not in (EstadoPrestamo.ACTIVO, EstadoPrestamo.ENTREGADO):
+        if self.estado != EstadoPrestamo.ENTREGADO:
             return False
 
         fecha = _ensure_utc(fecha_actual) if fecha_actual is not None else datetime.now(UTC)
@@ -102,18 +115,8 @@ class Prestamo(BaseEntity):
         return fecha <= fin
 
     def renovar(self, dias: int = 7, fecha_actual: datetime | None = None) -> None:
-        """
-        Extiende la fecha_fin del préstamo por una cantidad de días.
-        Solo permitido si el préstamo es apto para prórroga.
-        """
-        if dias <= 0:
-            raise ValueError("Los días de renovación deben ser mayores a 0")
-        if not self.solicitar_prorroga(dias=dias, fecha_actual=fecha_actual):
-            raise ValueError(
-                f"No se puede renovar el préstamo en estado {self.estado.value} o fuera de plazo"
-            )
-
-        self.fecha_fin = self.fecha_fin + timedelta(days=dias)
+        """Las renovaciones de préstamos están deshabilitadas por política operativa."""
+        raise ValueError("Renovación de préstamos no permitida")
 
     def cancelar(self, motivo: str = "") -> None:
         """Cancela administrativamente el préstamo si está pendiente de entrega física (ACTIVO)."""

@@ -102,6 +102,7 @@ def test_devolver_prestamo_a_tiempo():
     prestamo = _crear_prestamo(
         inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
         fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
     )
     fecha_devolucion = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
     dias_retraso = prestamo.devolver(fecha_devolucion)
@@ -116,6 +117,7 @@ def test_devolver_prestamo_mismo_dia_fecha_fin():
     prestamo = _crear_prestamo(
         inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
         fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
     )
     fecha_devolucion = datetime(2026, 10, 5, 20, 0, tzinfo=UTC)
     dias_retraso = prestamo.devolver(fecha_devolucion)
@@ -129,6 +131,7 @@ def test_devolver_prestamo_con_retraso():
     prestamo = _crear_prestamo(
         inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
         fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
+        estado=EstadoPrestamo.ENTREGADO,
     )
     fecha_devolucion = datetime(2026, 10, 8, 10, 0, tzinfo=UTC)
     dias_retraso = prestamo.devolver(fecha_devolucion)
@@ -162,6 +165,13 @@ def test_devolver_prestamo_ya_devuelto_lanza_error():
 def test_devolver_prestamo_cancelado_lanza_error():
     prestamo = _crear_prestamo(estado=EstadoPrestamo.CANCELADO)
     with pytest.raises(ValueError, match="No se puede devolver un préstamo cancelado"):
+        prestamo.devolver()
+
+
+@pytest.mark.unit
+def test_devolver_prestamo_activo_lanza_error():
+    prestamo = _crear_prestamo(estado=EstadoPrestamo.ACTIVO)
+    with pytest.raises(ValueError, match="ACTIVO"):
         prestamo.devolver()
 
 
@@ -206,7 +216,7 @@ def test_solicitar_prorroga():
     prestamo = _crear_prestamo(
         inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
         fin=fin,
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.ENTREGADO,
     )
 
     # Prórroga válida dentro del plazo
@@ -221,38 +231,46 @@ def test_solicitar_prorroga():
         prestamo.solicitar_prorroga(dias=3, fecha_actual=datetime(2026, 10, 6, tzinfo=UTC)) is False
     )
 
-    # En estado no activo
+    # En estado ACTIVO o VENCIDO no permite prórroga
+    prestamo.estado = EstadoPrestamo.ACTIVO
+    assert prestamo.solicitar_prorroga(dias=3, fecha_actual=datetime(2026, 10, 4, tzinfo=UTC)) is False
     prestamo.estado = EstadoPrestamo.VENCIDO
     assert prestamo.solicitar_prorroga(dias=3) is False
 
 
 @pytest.mark.unit
-def test_renovar_exitoso():
+def test_renovar_deshabilitado_lanza_error():
     fecha_inicio = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
     fecha_fin = datetime(2026, 10, 5, 18, 0, tzinfo=UTC)
-    prestamo = _crear_prestamo(inicio=fecha_inicio, fin=fecha_fin, estado=EstadoPrestamo.ACTIVO)
+    prestamo = _crear_prestamo(inicio=fecha_inicio, fin=fecha_fin, estado=EstadoPrestamo.ENTREGADO)
 
-    fecha_actual = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)
-    prestamo.renovar(dias=5, fecha_actual=fecha_actual)
+    with pytest.raises(ValueError, match="Renovación de préstamos no permitida"):
+        prestamo.renovar(dias=5, fecha_actual=datetime(2026, 10, 3, 12, 0, tzinfo=UTC))
 
-    assert prestamo.fecha_fin == fecha_fin + timedelta(days=5)
+    assert prestamo.fecha_fin == fecha_fin
 
 
 @pytest.mark.unit
-def test_renovar_invalido_lanza_error():
+def test_es_devolucion_puntual_antes_en_y_despues_de_fecha_fin():
+    fecha_fin = datetime(2026, 10, 5, 14, 0, tzinfo=UTC)
     prestamo = _crear_prestamo(
         inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
-        fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
-        estado=EstadoPrestamo.ACTIVO,
+        fin=fecha_fin,
+        estado=EstadoPrestamo.ENTREGADO,
     )
 
-    # Días <= 0
-    with pytest.raises(ValueError, match="días de renovación deben ser mayores a 0"):
-        prestamo.renovar(dias=0)
+    # Antes de la hora límite -> puntual
+    assert prestamo.es_devolucion_puntual(datetime(2026, 10, 5, 13, 59, tzinfo=UTC)) is True
+    # Exactamente a la hora límite -> puntual
+    assert prestamo.es_devolucion_puntual(datetime(2026, 10, 5, 14, 0, tzinfo=UTC)) is True
+    # Mismo día después de la hora límite -> NO puntual, pero 0 días de retraso
+    mismo_dia_tarde = datetime(2026, 10, 5, 16, 0, tzinfo=UTC)
+    assert prestamo.es_devolucion_puntual(mismo_dia_tarde) is False
+    assert prestamo.calcular_dias_retraso(mismo_dia_tarde) == 0
 
-    # Fuera de fecha
-    with pytest.raises(ValueError, match="No se puede renovar"):
-        prestamo.renovar(dias=3, fecha_actual=datetime(2026, 10, 6, tzinfo=UTC))
+    # Al devolver usando fecha_devolucion_real, sin argumento usa fecha_devolucion_real
+    prestamo.devolver(mismo_dia_tarde)
+    assert prestamo.es_devolucion_puntual() is False
 
 
 @pytest.mark.unit

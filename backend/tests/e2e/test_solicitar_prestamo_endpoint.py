@@ -229,7 +229,7 @@ def test_flujo_e2e_reserva_espera_y_promocion():
 	u2 = crear_usuario(u2_id, RolUsuario.ESTUDIANTE)
 
 	candidato = (datetime.now(UTC) + timedelta(days=1)).replace(
-		hour=10, minute=0, second=0, microsecond=0
+		hour=15, minute=0, second=0, microsecond=0
 	)
 	while candidato.weekday() >= 5:
 		candidato += timedelta(days=1)
@@ -287,7 +287,7 @@ def test_solicitar_reserva_rechaza_roles_gestion_con_403():
 	gestor_id = uuid4()
 	app.dependency_overrides[get_current_user] = lambda: crear_usuario(gestor_id, RolUsuario.GESTOR_ALMACEN)
 	candidato = (datetime.now(UTC) + timedelta(days=1)).replace(
-		hour=10, minute=0, second=0, microsecond=0
+		hour=15, minute=0, second=0, microsecond=0
 	)
 	while candidato.weekday() >= 5:
 		candidato += timedelta(days=1)
@@ -325,7 +325,7 @@ def test_solicitar_reserva_duracion_mayor_a_7_dias_retorna_409():
 	u_id = uuid4()
 	app.dependency_overrides[get_current_user] = lambda: crear_usuario(u_id, RolUsuario.ESTUDIANTE)
 	candidato = (datetime.now(UTC) + timedelta(days=1)).replace(
-		hour=10, minute=0, second=0, microsecond=0
+		hour=15, minute=0, second=0, microsecond=0
 	)
 	while candidato.weekday() >= 5:
 		candidato += timedelta(days=1)

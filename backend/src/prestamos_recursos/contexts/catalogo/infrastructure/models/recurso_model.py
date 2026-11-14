@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Enum as SAEnum, String, Text
+from sqlalchemy import JSON, String, Text
+from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from prestamos_recursos.contexts.catalogo.domain.enums import EstadoRecurso
@@ -25,9 +27,12 @@ class RecursoModel(Base):
     estado: Mapped[EstadoRecurso] = mapped_column(
         SAEnum(EstadoRecurso, native_enum=False, length=30), nullable=False
     )
-    marca: Mapped[str] = mapped_column(String(255), nullable=False)
-    modelo: Mapped[str] = mapped_column(String(255), nullable=False)
-    numero_serie: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    color: Mapped[str] = mapped_column(String(255), nullable=False)
+    marca: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    modelo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    numero_serie: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    color: Mapped[str | None] = mapped_column(String(255), nullable=True)
     estado_fisico: Mapped[str] = mapped_column(String(255), nullable=False)
     foto_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    especificaciones: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
