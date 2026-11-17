@@ -762,21 +762,16 @@ export default function GestionReputacionPage() {
                   </p>
 
                   <div
+                    className="pestanas"
                     role="tablist"
                     aria-label="Secciones de la ficha del alumno"
-                    style={{
-                      display: "flex",
-                      gap: "0.5rem",
-                      flexWrap: "wrap",
-                      marginBottom: "1rem",
-                    }}
                   >
                     <button
                       type="button"
                       role="tab"
                       aria-selected={pestanaActiva === "reputacion"}
-                      className={`boton boton--sm ${
-                        pestanaActiva === "reputacion" ? "boton--primario" : "boton--fantasma"
+                      className={`pestanas__boton ${
+                        pestanaActiva === "reputacion" ? "pestanas__boton--activa" : ""
                       }`}
                       onClick={() => setPestanaActiva("reputacion")}
                     >
@@ -786,12 +781,13 @@ export default function GestionReputacionPage() {
                       type="button"
                       role="tab"
                       aria-selected={pestanaActiva === "historial"}
-                      className={`boton boton--sm ${
-                        pestanaActiva === "historial" ? "boton--primario" : "boton--fantasma"
+                      className={`pestanas__boton ${
+                        pestanaActiva === "historial" ? "pestanas__boton--activa" : ""
                       }`}
                       onClick={() => setPestanaActiva("historial")}
                     >
-                      Historial de Préstamos ({prestamosAlumno.length})
+                      <span>Historial de Préstamos</span>
+                      <span className="pestanas__contador">{prestamosAlumno.length}</span>
                     </button>
                   </div>
 
