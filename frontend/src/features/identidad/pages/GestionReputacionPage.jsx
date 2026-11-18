@@ -12,6 +12,15 @@ import {
 } from "../api.js";
 import { mensajeDeError, textoDeDetalle } from "../errores.js";
 
+// Roles que pueden solicitar préstamos (se excluyen GESTOR_ALMACEN y ADMINISTRADOR_SISTEMA)
+const ROLES_SOLICITANTES = ["ESTUDIANTE", "DOCENTE", "PERSONAL_ADMINISTRATIVO"];
+
+const ETIQUETAS_ROL = {
+  ESTUDIANTE: "Estudiante",
+  DOCENTE: "Docente",
+  PERSONAL_ADMINISTRATIVO: "Personal admin.",
+};
+
 // Aviso propio del 403; el resto de códigos muestran el detalle del backend (RF-09)
 const MENSAJES_CARGA = {
   403: "No tienes permisos de gestión para consultar la reputación de otros usuarios.",
@@ -34,11 +43,19 @@ const CLASES_ESTADO_EXCEPCION = {
 };
 
 const CLASES_ESTADO_PRESTAMO = {
-  ACTIVO: "insignia--info",
+  POR_ENTREGAR: "insignia--info",
   ENTREGADO: "insignia--exito",
   DEVUELTO: "insignia--neutra",
   VENCIDO: "insignia--error",
   CANCELADO: "insignia--neutra",
+};
+
+const ETIQUETA_ESTADO_PRESTAMO = {
+  POR_ENTREGAR: "Por entregar",
+  ENTREGADO: "Entregado",
+  DEVUELTO: "Devuelto",
+  VENCIDO: "Vencido",
+  CANCELADO: "Cancelado",
 };
 
 /**
@@ -83,6 +100,7 @@ export default function GestionReputacionPage() {
   const [errorFicha, setErrorFicha] = useState(null);
   // Último usuario pedido: descarta respuestas de selecciones anteriores (RF-04)
   const idPedidoFicha = useRef(null);
+  const fichaRef = useRef(null);
 
   // --- Estado de pestañas y del historial de préstamos del alumno (Spec 008, RF-07) ---
   const [pestanaActiva, setPestanaActiva] = useState("reputacion");
@@ -289,9 +307,12 @@ export default function GestionReputacionPage() {
     }
   };
 
-  // Filtro local: sin peticiones por tecla y sin distinguir mayúsculas ni acentos (RF-03)
+  // Filtro local: solo solicitantes (ESTUDIANTE, DOCENTE, PERSONAL_ADMINISTRATIVO)
+  const usuariosSolicitantes = usuarios.filter((usuario) =>
+    (usuario.roles || []).some((rol) => ROLES_SOLICITANTES.includes(rol))
+  );
   const textoFiltro = normalizar(filtro);
-  const usuariosFiltrados = usuarios.filter(
+  const usuariosFiltrados = usuariosSolicitantes.filter(
     (usuario) =>
       normalizar(usuario.nombre).includes(textoFiltro) ||
       normalizar(usuario.correo).includes(textoFiltro)
@@ -308,6 +329,9 @@ export default function GestionReputacionPage() {
     setAnulacionPendiente(null);
     setExitoAnulacion(null);
     setErrorAnulacion(null);
+    if (window.innerWidth < 900) {
+      fichaRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   };
 
   const sanciones = ficha?.sanciones ?? [];
@@ -626,102 +650,100 @@ export default function GestionReputacionPage() {
         </div>
       ) : (
         <div className="formulario">
-          <section className="tarjeta">
-            <div className="tarjeta__cabecera">Usuarios</div>
-            <div className="tarjeta__cuerpo">
-              {cargandoUsuarios ? (
-                <p className="cargando" role="status">
-                  Cargando usuarios...
-                </p>
-              ) : errorUsuarios ? (
-                <div className="alerta alerta--error" role="alert">
-                  <span>{errorUsuarios.texto}</span>
-                  {errorUsuarios.reintentable && (
-                    <button
-                      type="button"
-                      className="boton boton--secundario boton--sm"
-                      onClick={cargarUsuarios}
-                    >
-                      Reintentar
-                    </button>
-                  )}
-                </div>
-              ) : usuarios.length === 0 ? (
-                <div className="estado-vacio">
-                  <p className="estado-vacio__titulo">No hay usuarios registrados</p>
-                  <p>Todavía no hay cuentas que gestionar.</p>
-                </div>
-              ) : (
-                <div className="formulario">
-                  <div className="campo">
-                    <label className="campo__etiqueta" htmlFor="filtro-usuarios">
-                      Filtrar por nombre o correo
-                    </label>
-                    <input
-                      className="campo__control"
-                      id="filtro-usuarios"
-                      type="search"
-                      value={filtro}
-                      onChange={(e) => setFiltro(e.target.value)}
-                      placeholder="Escribe un nombre o un correo"
-                    />
+          <div className="maestro-detalle">
+            <section className="tarjeta maestro-detalle__lista">
+              <div className="tarjeta__cabecera">
+                Solicitantes ({usuariosSolicitantes.length})
+              </div>
+              <div className="tarjeta__cuerpo">
+                {cargandoUsuarios ? (
+                  <p className="cargando" role="status">
+                    Cargando usuarios...
+                  </p>
+                ) : errorUsuarios ? (
+                  <div className="alerta alerta--error" role="alert">
+                    <span>{errorUsuarios.texto}</span>
+                    {errorUsuarios.reintentable && (
+                      <button
+                        type="button"
+                        className="boton boton--secundario boton--sm"
+                        onClick={cargarUsuarios}
+                      >
+                        Reintentar
+                      </button>
+                    )}
                   </div>
-
-                  {usuariosFiltrados.length === 0 ? (
-                    <div className="estado-vacio">
-                      <p className="estado-vacio__titulo">Ningún usuario coincide</p>
-                      <p>Prueba con otro nombre o correo.</p>
+                ) : usuariosSolicitantes.length === 0 ? (
+                  <div className="estado-vacio">
+                    <p className="estado-vacio__titulo">No hay solicitantes registrados</p>
+                    <p>Todavía no hay estudiantes, docentes o personal administrativo.</p>
+                  </div>
+                ) : (
+                  <div className="formulario">
+                    <div className="campo">
+                      <label className="campo__etiqueta" htmlFor="filtro-usuarios">
+                        Filtrar por nombre o correo
+                      </label>
+                      <input
+                        className="campo__control"
+                        id="filtro-usuarios"
+                        type="search"
+                        value={filtro}
+                        onChange={(e) => setFiltro(e.target.value)}
+                        placeholder="Escribe un nombre o un correo"
+                      />
                     </div>
-                  ) : (
-                    <div className="tabla__contenedor">
-                      <table className="tabla tabla--apilada">
-                        <thead>
-                          <tr>
-                            <th scope="col">Nombre</th>
-                            <th scope="col">Correo</th>
-                            <th scope="col">Roles</th>
-                            <th scope="col">Acción</th>
-                          </tr>
-                        </thead>
-                        <tbody>
+
+                    {usuariosFiltrados.length === 0 ? (
+                      <div className="estado-vacio">
+                        <p className="estado-vacio__titulo">Ningún solicitante coincide</p>
+                        <p>Prueba con otro nombre o correo.</p>
+                      </div>
+                    ) : (
+                      <div className="maestro-detalle__scroll">
+                        <div className="lista-seleccion" role="list" aria-label="Lista de solicitantes">
                           {usuariosFiltrados.map((usuario) => {
                             const esSeleccionado = seleccionado?.id === usuario.id;
+                            const rolVisible = (usuario.roles || [])
+                              .filter((rol) => ROLES_SOLICITANTES.includes(rol))
+                              .map((rol) => ETIQUETAS_ROL[rol] || rol)
+                              .join(", ");
                             return (
-                              <tr key={usuario.id}>
-                                <td data-etiqueta="Nombre">{usuario.nombre}</td>
-                                <td data-etiqueta="Correo">{usuario.correo}</td>
-                                <td data-etiqueta="Roles">
-                                  {(usuario.roles || []).join(", ")}
-                                </td>
-                                <td data-etiqueta="Acción">
-                                  <button
-                                    type="button"
-                                    className="boton boton--secundario boton--sm"
-                                    onClick={() => seleccionar(usuario)}
-                                    aria-pressed={esSeleccionado}
-                                  >
-                                    Seleccionar
-                                  </button>{" "}
-                                  {esSeleccionado && (
-                                    <span className="insignia insignia--info">
-                                      Seleccionado
-                                    </span>
-                                  )}
-                                </td>
-                              </tr>
+                              <button
+                                key={usuario.id}
+                                type="button"
+                                role="listitem"
+                                className={`lista-seleccion__item ${
+                                  esSeleccionado ? "lista-seleccion__item--activo" : ""
+                                }`}
+                                onClick={() => seleccionar(usuario)}
+                                aria-pressed={esSeleccionado}
+                              >
+                                <span className="lista-seleccion__meta">
+                                  <span className="lista-seleccion__nombre">{usuario.nombre}</span>
+                                  <span className="lista-seleccion__sub">{usuario.correo}</span>
+                                </span>
+                                <span
+                                  className={`insignia ${
+                                    esSeleccionado ? "insignia--info" : "insignia--neutra"
+                                  }`}
+                                >
+                                  {esSeleccionado ? "Seleccionado" : rolVisible}
+                                </span>
+                              </button>
                             );
                           })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </section>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
 
-          <section className="tarjeta">
-            <div className="tarjeta__cabecera">Ficha del usuario</div>
+            <div className="maestro-detalle__contenido" ref={fichaRef}>
+              <section className="tarjeta">
+                <div className="tarjeta__cabecera">Ficha del usuario</div>
             <div className="tarjeta__cuerpo">
               {/* Sin usuario seleccionado */}
               {!seleccionado && (
@@ -740,21 +762,16 @@ export default function GestionReputacionPage() {
                   </p>
 
                   <div
+                    className="pestanas"
                     role="tablist"
                     aria-label="Secciones de la ficha del alumno"
-                    style={{
-                      display: "flex",
-                      gap: "0.5rem",
-                      flexWrap: "wrap",
-                      marginBottom: "1rem",
-                    }}
                   >
                     <button
                       type="button"
                       role="tab"
                       aria-selected={pestanaActiva === "reputacion"}
-                      className={`boton boton--sm ${
-                        pestanaActiva === "reputacion" ? "boton--primario" : "boton--fantasma"
+                      className={`pestanas__boton ${
+                        pestanaActiva === "reputacion" ? "pestanas__boton--activa" : ""
                       }`}
                       onClick={() => setPestanaActiva("reputacion")}
                     >
@@ -764,12 +781,13 @@ export default function GestionReputacionPage() {
                       type="button"
                       role="tab"
                       aria-selected={pestanaActiva === "historial"}
-                      className={`boton boton--sm ${
-                        pestanaActiva === "historial" ? "boton--primario" : "boton--fantasma"
+                      className={`pestanas__boton ${
+                        pestanaActiva === "historial" ? "pestanas__boton--activa" : ""
                       }`}
                       onClick={() => setPestanaActiva("historial")}
                     >
-                      Historial de Préstamos ({prestamosAlumno.length})
+                      <span>Historial de Préstamos</span>
+                      <span className="pestanas__contador">{prestamosAlumno.length}</span>
                     </button>
                   </div>
 
@@ -1127,7 +1145,8 @@ export default function GestionReputacionPage() {
                                             "insignia--neutra"
                                           }`}
                                         >
-                                          {prestamo.estado}
+                                          {ETIQUETA_ESTADO_PRESTAMO[prestamo.estado] ||
+                                            prestamo.estado}
                                         </span>
                                       </td>
                                       <td data-etiqueta="Periodo pactado">
@@ -1400,6 +1419,8 @@ export default function GestionReputacionPage() {
               </section>
             </>
           )}
+            </div>
+          </div>
 
           {/* Amnistía mensual: acción global con confirmación en dos pasos (T8, RF-08, RF-09) */}
           <section className="tarjeta">
