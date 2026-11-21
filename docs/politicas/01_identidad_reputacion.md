@@ -55,7 +55,7 @@ Toda sanción tiene una `fecha_fin` obligatoria (`NOT NULL`). Una sanción está
 | `INASISTENCIA_RESERVA` | −15 | $0 | 3 días |
 
 - El **retraso se calcula por días calendario en UTC** (`fecha_devolucion.date() - fecha_fin.date()`).
-- Desde la devolución en ventanilla (`prestamos`) solo se aplican hoy `TARDANZA` y `DANO_PARCIAL`. `DANO_TOTAL` e `INASISTENCIA_RESERVA` se aplican manualmente por gestión (`POST /reputacion/sanciones`).
+- Desde la devolución en ventanilla (`prestamos`) se aplican automáticamente `TARDANZA` y `DANO_PARCIAL`. `INASISTENCIA_RESERVA` se aplica automáticamente una sola vez cuando expira un préstamo `POR_ENTREGAR` o una reserva `CONFIRMADA` sin recogida tras `min(fecha_inicio + 30 minutos, fecha_fin)` (y también puede registrarse manualmente), mientras que `DANO_TOTAL` se aplica manualmente por gestión (`POST /reputacion/sanciones`).
 
 ### Política 4: Bloqueo Operativo y Excepciones Académicas (Spec 007)
 - El **nivel de reputación no bloquea** por sí solo: únicamente fija la prioridad en la lista de espera y el cupo de operaciones simultáneas.
@@ -79,7 +79,7 @@ Toda sanción tiene una `fecha_fin` obligatoria (`NOT NULL`). Una sanción está
 - **Eliminación de usuarios (`DELETE /usuarios/{id}`):**
   - Acción exclusiva para `ADMINISTRADOR_SISTEMA` con confirmación inline en dos pasos en frontend.
   - Autoprotección: el administrador no puede eliminar su propia cuenta (`409 Conflict`).
-  - Protección de operaciones activas: se consulta a `ReservaService` y `PrestamoService`; si el usuario tiene reservas activas (`PENDIENTE` o `CONFIRMADA`) o préstamos en curso (`ACTIVO`, `ENTREGADO` o `VENCIDO`), se rechaza con `409 Conflict`.
+  - Protección de operaciones activas: se consulta a `ReservaService` y `PrestamoService`; si el usuario tiene reservas activas (`PENDIENTE` o `CONFIRMADA`) o préstamos en curso (`POR_ENTREGAR`, `ENTREGADO` o `VENCIDO`), se rechaza con `409 Conflict`.
   - Si procede, se eliminan en cascada sus excepciones académicas, perfil de reputación y sanciones asociadas.
 
 ---
@@ -110,7 +110,7 @@ Toda sanción tiene una `fecha_fin` obligatoria (`NOT NULL`). Una sanción está
 - **`reputacion_service.py` (`ReputacionService`)**:
   - `obtener_perfil(usuario_id)`: Devuelve el `PerfilReputacionDTO` (si no existe, lo crea con 500 puntos). Es usado también por el contexto `reservas` para ordenar la lista de espera.
   - `consultar_elegibilidad_lectura(usuario_id)`, `consultar_nivel_lectura(usuario_id)`, `consultar_puntaje_lectura(usuario_id)`: Consultas puras de lectura sin efectos secundarios para inspección y validación.
-  - `aplicar_sancion(...)`, `premiar_entrega_puntual(...)`, `premiar_devolucion_puntual(...)`: Llamados desde el contexto `prestamos` al entregar o devolver un recurso.
+  - `aplicar_sancion(...)`, `premiar_entrega_puntual(...)`, `premiar_devolucion_puntual(...)`: Llamados desde `prestamos` al entregar, devolver o expirar un préstamo `POR_ENTREGAR`, y desde `reservas` al vencer una reserva `CONFIRMADA` por inasistencia.
   - `obtener_elegibilidad(usuario_id)`: Evalúa bloqueo por sanciones vigentes y excepciones académicas activas.
 - **`usuario_service.py` (`UsuarioService`)**:
   - `crear_usuario(datos, actor)`: Alta de cuentas con control jerárquico de roles según permisos del actor.

@@ -320,7 +320,7 @@ Mientras llega la respuesta. Texto claro, sin spinners caseros.
 | Reserva | `CANCELADA` | `insignia--neutra` | gris |
 | Reserva | `VENCIDA` | `insignia--error` | rojo |
 | Reserva | `CONVERTIDA` | `insignia--info` | azul |
-| Préstamo | `ACTIVO` | `insignia--info` | azul |
+| Préstamo | `POR_ENTREGAR` | `insignia--info` | azul |
 | Préstamo | `ENTREGADO` | `insignia--info` | azul |
 | Préstamo | `DEVUELTO` | `insignia--exito` | verde |
 | Préstamo | `VENCIDO` | `insignia--error` | rojo |
@@ -436,4 +436,5 @@ Cambios registrados:
   `global.css`. Se añade el estado `ENTREGADO` a la tabla de estados de préstamo con insignia
   `insignia--info` (§9). Spec 005.
 - **2026-11-03** — Segregación de funciones en navegación (§6): `/reputacion` pasa a ser visible solo para roles solicitantes (`ESTUDIANTE`, `DOCENTE`, `PERSONAL_ADMINISTRATIVO`) y se oculta para `GESTOR_ALMACEN` y `ADMINISTRADOR_SISTEMA`. Se documentan en §9 las insignias de estado de cuenta de usuario (`ACTIVO`, `INACTIVO`). Spec 006.
+- **2026-11-16** — Actualización de estado de préstamo en §9 (`POR_ENTREGAR` con etiqueta «Por entregar» en lugar de `ACTIVO`) y alineación del filtro «En curso» de `/historial` para incluir `POR_ENTREGAR`, `ENTREGADO` y `VENCIDO`. Spec 010.
 

@@ -781,3 +781,30 @@ def test_solicitar_reserva_recurso_en_mantenimiento_o_fuera_de_servicio_retorna_
     )
 
 
+def test_convertir_a_prestamo_expirada_retorna_409_y_marca_vencida(cliente):
+    """CL-9 / RF-14: convertir tras superar la tolerancia de 30m marca VENCIDA y retorna 409."""
+    reserva_id = uuid4()
+    ahora = datetime.now(UTC)
+    with SessionLocal() as session:
+        session.add(
+            ReservaModel(
+                id=reserva_id,
+                usuario_id=ID_USUARIO_PRUEBA,
+                recurso_id=uuid4(),
+                fecha_inicio=ahora - timedelta(minutes=35),
+                fecha_fin=ahora + timedelta(hours=2),
+                estado=EstadoReserva.CONFIRMADA,
+            )
+        )
+        session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: USUARIO_GESTOR
+    resp = cliente.post(f"/reservas/{reserva_id}/prestamo")
+    assert resp.status_code == 409
+
+    with SessionLocal() as session:
+        reserva = session.get(ReservaModel, reserva_id)
+        assert reserva is not None
+        assert reserva.estado == EstadoReserva.VENCIDA
+
+

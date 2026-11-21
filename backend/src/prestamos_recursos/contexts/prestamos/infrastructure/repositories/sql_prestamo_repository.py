@@ -57,7 +57,7 @@ class SqlPrestamoRepository(PrestamoRepository):
     def obtener_activos(self) -> list[Prestamo]:
         modelos = (
             self._session.scalars(
-                select(PrestamoModel).where(PrestamoModel.estado == EstadoPrestamo.ACTIVO)
+                select(PrestamoModel).where(PrestamoModel.estado == EstadoPrestamo.POR_ENTREGAR)
             )
             .all()
         )
@@ -67,6 +67,17 @@ class SqlPrestamoRepository(PrestamoRepository):
         modelos = (
             self._session.scalars(
                 select(PrestamoModel).where(PrestamoModel.usuario_id == id_usuario)
+            )
+            .all()
+        )
+        return [self._to_entity(m) for m in modelos]
+
+    def obtener_por_recurso(self, id_recurso: UUID) -> list[Prestamo]:
+        modelos = (
+            self._session.scalars(
+                select(PrestamoModel)
+                .where(PrestamoModel.recurso_id == id_recurso)
+                .order_by(PrestamoModel.fecha_inicio.desc(), PrestamoModel.id)
             )
             .all()
         )

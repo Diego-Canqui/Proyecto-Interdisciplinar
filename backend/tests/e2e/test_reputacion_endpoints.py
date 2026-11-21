@@ -23,6 +23,7 @@ def setup_database():
     # Import models to register them
     from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models import (  # noqa: F401
         excepcion_academica_model,
+        movimiento_reputacion_model,
         perfil_reputacion_model,
         usuario_model,
     )
@@ -783,3 +784,158 @@ class TestRequireRoles:
         # This is tested indirectly via the sanciones/excepciones tests above
         # but we can also test it directly if we expose a test endpoint
         # For now, the indirect test via POST /reputacion/sanciones is sufficient
+
+
+@pytest.mark.e2e
+class TestMovimientosYExportacionCSVEndpoints:
+    """Tests E2E para bitácora de movimientos y exportación CSV (Spec 011)."""
+
+    def test_movimientos_y_csv_usuario_requieren_autenticacion_401(self) -> None:
+        uid = uuid4()
+        assert client.get(f"/reputacion/usuarios/{uid}/movimientos").status_code == 401
+        assert client.get(f"/reputacion/usuarios/{uid}/movimientos/csv").status_code == 401
+        assert client.get("/reputacion/movimientos/csv").status_code == 401
+
+    def test_movimientos_y_csv_denegados_para_solicitante_403(self) -> None:
+        datos = _crear_usuario_ejemplo(roles=["ESTUDIANTE"])
+        token, usuario = _registrar_y_login(datos)
+
+        assert (
+            client.get(
+                f"/reputacion/usuarios/{usuario['id']}/movimientos",
+                headers={"Authorization": f"Bearer {token}"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.get(
+                f"/reputacion/usuarios/{usuario['id']}/movimientos/csv",
+                headers={"Authorization": f"Bearer {token}"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.get(
+                "/reputacion/movimientos/csv",
+                headers={"Authorization": f"Bearer {token}"},
+            ).status_code
+            == 403
+        )
+
+    def test_movimientos_y_csv_usuario_inexistente_404(self) -> None:
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        token_admin, _ = _registrar_y_login(datos_admin)
+        inexistente = uuid4()
+
+        assert (
+            client.get(
+                f"/reputacion/usuarios/{inexistente}/movimientos",
+                headers={"Authorization": f"Bearer {token_admin}"},
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(
+                f"/reputacion/usuarios/{inexistente}/movimientos/csv",
+                headers={"Authorization": f"Bearer {token_admin}"},
+            ).status_code
+            == 404
+        )
+
+    def test_movimientos_y_csv_usuario_vacio_devuelve_solo_encabezados(self) -> None:
+        datos_gestor = _crear_usuario_ejemplo(roles=["GESTOR_ALMACEN"])
+        datos_gestor["correo"] = "gestor_csv@example.com"
+        token_gestor, _ = _registrar_y_login(datos_gestor)
+
+        datos_alumno = _crear_usuario_ejemplo(roles=["ESTUDIANTE"])
+        datos_alumno["correo"] = "alumno_vacio@example.com"
+        _, alumno = _registrar_y_login(datos_alumno)
+
+        resp_json = client.get(
+            f"/reputacion/usuarios/{alumno['id']}/movimientos",
+            headers={"Authorization": f"Bearer {token_gestor}"},
+        )
+        assert resp_json.status_code == 200
+        assert resp_json.json() == []
+
+        resp_csv = client.get(
+            f"/reputacion/usuarios/{alumno['id']}/movimientos/csv",
+            headers={"Authorization": f"Bearer {token_gestor}"},
+        )
+        assert resp_csv.status_code == 200
+        assert resp_csv.headers["content-type"].startswith("text/csv")
+        assert "attachment; filename=" in resp_csv.headers["content-disposition"]
+        assert resp_csv.text.startswith("\ufeff")
+        lineas = resp_csv.text.lstrip("\ufeff").strip().splitlines()
+        assert len(lineas) == 1
+        assert "Usuario,Correo,Fecha,Evento,Motivo,Recurso" in lineas[0]
+
+    def test_flujo_sancion_y_amnistia_registra_movimientos_y_csv_global(self) -> None:
+        datos_admin = _crear_usuario_ejemplo(roles=["ADMINISTRADOR_SISTEMA"])
+        datos_admin["correo"] = "admin_csv@example.com"
+        token_admin, _ = _registrar_y_login(datos_admin)
+
+        datos_a1 = _crear_usuario_ejemplo(roles=["ESTUDIANTE"])
+        datos_a1["nombre"] = "Ana López"
+        datos_a1["correo"] = "ana_csv@example.com"
+        _, alumno_1 = _registrar_y_login(datos_a1)
+
+        datos_a2 = _crear_usuario_ejemplo(roles=["DOCENTE"])
+        datos_a2["nombre"] = "Carlos Ruiz"
+        datos_a2["correo"] = "carlos_csv@example.com"
+        _, alumno_2 = _registrar_y_login(datos_a2)
+
+        # Aplicar 3 sanciones de daño total a Ana para llevarla a BAJO (500 -> 200)
+        for _ in range(3):
+            resp_s = client.post(
+                "/reputacion/sanciones",
+                json={
+                    "usuario_id": alumno_1["id"],
+                    "tipo": "DANO_TOTAL",
+                    "motivo": "Daño físico grave",
+                    "monto_opcional": "120.00",
+                },
+                headers={"Authorization": f"Bearer {token_admin}"},
+            )
+            assert resp_s.status_code == 201
+
+        # Aplicar tardanza a Carlos (500 -> 490)
+        resp_c = client.post(
+            "/reputacion/sanciones",
+            json={
+                "usuario_id": alumno_2["id"],
+                "tipo": "TARDANZA",
+                "motivo": "Devolución tardía de equipo",
+                "dias_retardo": 2,
+            },
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert resp_c.status_code == 201
+
+        resp_movs = client.get(
+            f"/reputacion/usuarios/{alumno_1['id']}/movimientos",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert resp_movs.status_code == 200
+        movs = resp_movs.json()
+        assert len(movs) == 3
+        assert [m["puntaje_resultante"] for m in movs] == [200, 300, 400]
+        assert all(m["variacion_puntos"] == -100 for m in movs)
+
+        resp_csv_uno = client.get(
+            f"/reputacion/usuarios/{alumno_1['id']}/movimientos/csv",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert resp_csv_uno.status_code == 200
+        assert "ana_csv@example.com" in resp_csv_uno.text
+        assert "carlos_csv@example.com" not in resp_csv_uno.text
+
+        resp_csv_global = client.get(
+            "/reputacion/movimientos/csv",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert resp_csv_global.status_code == 200
+        assert "ana_csv@example.com" in resp_csv_global.text
+        assert "carlos_csv@example.com" in resp_csv_global.text
+        assert "Devolución tardía de equipo" in resp_csv_global.text
+

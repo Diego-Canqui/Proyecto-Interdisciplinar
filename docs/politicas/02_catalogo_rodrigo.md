@@ -48,13 +48,13 @@ Todo recurso se encuentra siempre en uno de estos 4 estados:
 - **Validación del estado operativo al reservar (Spec 007):**
   - Al solicitar una reserva, `ReservaService` consulta a `RecursoApplicationService`. Se admiten solicitudes de reserva si el recurso está en **`DISPONIBLE`** o **`EN_USO`** (en este último caso para fechas futuras o cola de espera).
   - Si el recurso está en **`MANTENIMIENTO`** o **`FUERA_DE_SERVICIO`**, el sistema rechaza la reserva con `409 Conflict` (`"el recurso no admite reservas por encontrarse en mantenimiento o fuera de servicio"`).
-- **Ventana de inicio de préstamo:** La conversión de reserva confirmada en préstamo se realiza dentro de la ventana `fecha_inicio - 1 hora <= ahora <= fecha_fin` (`409 Conflict` fuera de ventana).
+- **Ventana de inicio de préstamo:** La conversión de reserva confirmada en préstamo se realiza dentro de la ventana `fecha_inicio - 1 hora <= ahora <= min(fecha_inicio + 30 minutos, fecha_fin)` (`409 Conflict` fuera de ventana).
 - **Transiciones automáticas desde el contexto `prestamos`:**
   - Cuando un gestor convierte una reserva en préstamo (`PrestamoService.solicitar_prestamo`), verifica que el recurso esté en catálogo y lo pasa a **`EN_USO`**.
   - Cuando se procesa la devolución (`PrestamoService.procesar_devolucion`):
     - Si no se detectaron daños (`danos_detectados == False`): el recurso vuelve a **`DISPONIBLE`** y la garantía asociada se libera automáticamente (`LIBERADA` con `fecha_liberacion`).
     - Si se detectaron daños físicos (`danos_detectados == True`): el recurso pasa automáticamente a **`MANTENIMIENTO`** y la garantía queda retenida (`RETENIDA`).
-  - Cuando un préstamo en estado `ACTIVO` (aún no entregado físicamente) es cancelado en ventanilla (`PrestamoService.cancelar_prestamo`), el recurso vuelve automáticamente de `EN_USO` a **`DISPONIBLE`** sin penalizar la reputación (Spec 006).
+  - Cuando un préstamo en estado `POR_ENTREGAR` (aún no entregado físicamente) es cancelado en ventanilla (`PrestamoService.cancelar_prestamo`), el recurso vuelve automáticamente de `EN_USO` a **`DISPONIBLE`** sin penalizar la reputación (Spec 006). Si el préstamo `POR_ENTREGAR` expira automáticamente por inasistencia (Spec 010), pasa a `CANCELADO` y solo libera el recurso a **`DISPONIBLE`** si este se encuentra en `EN_USO` (sin sobrescribir `MANTENIMIENTO` ni `FUERA_DE_SERVICIO`).
 
 ---
 

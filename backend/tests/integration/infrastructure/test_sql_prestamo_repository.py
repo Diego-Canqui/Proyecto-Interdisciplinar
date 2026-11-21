@@ -29,7 +29,7 @@ def test_guardar_y_obtener_por_id():
         usuario_id=uuid4(),
         fecha_inicio=datetime(2026, 10, 20, tzinfo=UTC),
         fecha_fin=datetime(2026, 10, 25, tzinfo=UTC),
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.POR_ENTREGAR,
     )
 
     with session.begin():
@@ -39,7 +39,7 @@ def test_guardar_y_obtener_por_id():
     assert recuperado is not None
     assert recuperado.id == prestamo.id
     assert recuperado.usuario_id == prestamo.usuario_id
-    assert recuperado.estado == EstadoPrestamo.ACTIVO
+    assert recuperado.estado == EstadoPrestamo.POR_ENTREGAR
     assert recuperado.fecha_entrega_real is None
     assert recuperado.fecha_devolucion_real is None
 
@@ -55,7 +55,7 @@ def test_guardar_y_recuperar_fechas_reales():
         usuario_id=uuid4(),
         fecha_inicio=datetime(2026, 10, 20, 9, 0, tzinfo=UTC),
         fecha_fin=datetime(2026, 10, 25, 18, 0, tzinfo=UTC),
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.POR_ENTREGAR,
     )
 
     with session.begin():
@@ -95,7 +95,7 @@ def test_obtener_activos():
         usuario_id=usuario_id,
         fecha_inicio=datetime(2026, 10, 20, tzinfo=UTC),
         fecha_fin=datetime(2026, 10, 25, tzinfo=UTC),
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.POR_ENTREGAR,
     )
     p_devuelto = Prestamo(
         reserva_id=uuid4(),
@@ -127,7 +127,7 @@ def test_obtener_por_usuario():
         usuario_id=usuario_1,
         fecha_inicio=datetime(2026, 10, 20, tzinfo=UTC),
         fecha_fin=datetime(2026, 10, 25, tzinfo=UTC),
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.POR_ENTREGAR,
     )
     p2 = Prestamo(
         reserva_id=uuid4(),
@@ -143,7 +143,7 @@ def test_obtener_por_usuario():
         usuario_id=usuario_2,
         fecha_inicio=datetime(2026, 10, 10, tzinfo=UTC),
         fecha_fin=datetime(2026, 10, 15, tzinfo=UTC),
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.POR_ENTREGAR,
     )
 
     with session.begin():
@@ -177,7 +177,7 @@ def test_obtener_todos():
         usuario_id=usuario_2,
         fecha_inicio=datetime(2026, 10, 20, tzinfo=UTC),
         fecha_fin=datetime(2026, 10, 25, tzinfo=UTC),
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.POR_ENTREGAR,
     )
 
     with session.begin():
@@ -190,7 +190,7 @@ def test_obtener_todos():
     assert todos[0].id == p2.id
     assert todos[1].id == p1.id
     assert {p.usuario_id for p in todos} == {usuario_1, usuario_2}
-    assert {p.estado for p in todos} == {EstadoPrestamo.ACTIVO, EstadoPrestamo.DEVUELTO}
+    assert {p.estado for p in todos} == {EstadoPrestamo.POR_ENTREGAR, EstadoPrestamo.DEVUELTO}
 
 
 def test_obtener_todos_vacio():
@@ -199,3 +199,41 @@ def test_obtener_todos_vacio():
     assert repo.obtener_todos() == []
 
 
+
+def test_obtener_por_recurso_filtra_y_ordena_descendente():
+    session = make_session()
+    repo = SqlPrestamoRepository(session)
+    recurso_a = uuid4()
+    recurso_b = uuid4()
+    p1 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_a,
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 1, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 2, tzinfo=UTC),
+        estado=EstadoPrestamo.DEVUELTO,
+    )
+    p2 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_a,
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 10, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 11, tzinfo=UTC),
+        estado=EstadoPrestamo.DEVUELTO,
+    )
+    p3 = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_b,
+        usuario_id=uuid4(),
+        fecha_inicio=datetime(2026, 10, 15, tzinfo=UTC),
+        fecha_fin=datetime(2026, 10, 16, tzinfo=UTC),
+        estado=EstadoPrestamo.DEVUELTO,
+    )
+
+    with session.begin():
+        repo.guardar(p1)
+        repo.guardar(p2)
+        repo.guardar(p3)
+
+    resultado = repo.obtener_por_recurso(recurso_a)
+    assert [p.id for p in resultado] == [p2.id, p1.id]

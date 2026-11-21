@@ -49,6 +49,11 @@ def _validar_titular_o_gestion(usuario: UsuarioDTO, usuario_id_objetivo: UUID) -
         )
 
 
+def _error_conflicto_o_no_encontrado(exc: ValueError) -> HTTPException:
+    status_code = 404 if str(exc) == "Préstamo no encontrado" else 409
+    return HTTPException(status_code=status_code, detail=str(exc))
+
+
 # ------------------------------------------------------------
 # DTOs para el ciclo de entrega física (garantía + checklist)
 # ------------------------------------------------------------
@@ -118,8 +123,7 @@ def iniciar_entrega(
     try:
         service.iniciar_entrega(id_prestamo, data.tipo_garantia, compromiso)
     except ValueError as exc:
-        status_code = 404 if str(exc) == "Préstamo no encontrado" else 400
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise _error_conflicto_o_no_encontrado(exc) from exc
     return {"detalle": "Entrega iniciada"}
 
 
@@ -133,8 +137,7 @@ def agregar_item_checklist(
     try:
         service.agregar_item_checklist(id_prestamo, data.observaciones, data.fotos_urls)
     except ValueError as exc:
-        status_code = 404 if str(exc) == "Préstamo no encontrado" else 400
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise _error_conflicto_o_no_encontrado(exc) from exc
     return {"detalle": "Ítem agregado al checklist"}
 
 
@@ -147,8 +150,7 @@ def confirmar_entrega(
     try:
         service.confirmar_entrega(id_prestamo)
     except ValueError as exc:
-        status_code = 404 if str(exc) == "Préstamo no encontrado" else 400
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise _error_conflicto_o_no_encontrado(exc) from exc
     return {"detalle": "Entrega confirmada"}
 
 
@@ -161,8 +163,7 @@ def finalizar_entrega(
     try:
         service.finalizar_entrega(id_prestamo)
     except ValueError as exc:
-        status_code = 404 if str(exc) == "Préstamo no encontrado" else 400
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise _error_conflicto_o_no_encontrado(exc) from exc
     return {"detalle": "Entrega finalizada", "estado": "ENTREGADO"}
 
 
@@ -189,8 +190,7 @@ def completar_entrega(
             fotos_urls=data.fotos_urls,
         )
     except ValueError as exc:
-        status_code = 404 if str(exc) == "Préstamo no encontrado" else 400
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise _error_conflicto_o_no_encontrado(exc) from exc
     return {"detalle": "Entrega completada exitosamente", "estado": "ENTREGADO"}
 
 
@@ -254,15 +254,6 @@ def registrar_devolucion(
     }
 
 
-@router.post("/{id_prestamo}/renovar")
-def renovar_prestamo(
-    id_prestamo: UUID,
-    _usuario: UsuarioDTO = Depends(get_current_user),  # noqa: B008
-) -> dict:
-    """Renovación de préstamos deshabilitada por política operativa."""
-    raise HTTPException(status_code=410, detail="Renovación de préstamos no permitida")
-
-
 @router.post("/{id_prestamo}/cancelar")
 def cancelar_prestamo(
     id_prestamo: UUID,
@@ -271,12 +262,11 @@ def cancelar_prestamo(
     ),
     service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
 ) -> dict:
-    """Cancela administrativamente un préstamo en estado ACTIVO y libera el recurso."""
+    """Cancela administrativamente un préstamo en estado POR_ENTREGAR y libera el recurso."""
     try:
         service.cancelar_prestamo(id_prestamo)
     except ValueError as exc:
-        status_code = 404 if str(exc) == "Préstamo no encontrado" else 409
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise _error_conflicto_o_no_encontrado(exc) from exc
     return {"detalle": "Préstamo cancelado exitosamente", "estado": "CANCELADO"}
 
 
@@ -290,6 +280,18 @@ def consultar_historial(
     """Consulta el historial de préstamos de un usuario."""
     _validar_titular_o_gestion(usuario, id_usuario)
     return service.consultar_historial(id_usuario)
+
+
+@router.get("/recursos/{id_recurso}/historial", response_model=list[PrestamoDTO])
+def consultar_historial_recurso(
+    id_recurso: UUID,
+    _usuario: UsuarioDTO = Depends(  # noqa: B008
+        require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)  # noqa: B008
+    ),
+    service: PrestamoService = Depends(get_prestamo_service),  # noqa: B008
+) -> list[PrestamoDTO]:
+    """Consulta el historial de préstamos de un recurso (solo roles de gestión)."""
+    return service.consultar_historial_por_recurso(id_recurso)
 
 
 @router.get("", response_model=list[PrestamoDTO])

@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from prestamos_recursos.contexts.identidad_reputacion.domain.entities import MovimientoReputacion
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import (
     ExcepcionAcademica,
 )
@@ -14,6 +15,7 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_rep
     PerfilReputacion,
 )
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.sancion import Sancion
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums import TipoMovimientoReputacion
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepcion import (
     EstadoExcepcion,
 )
@@ -274,6 +276,47 @@ class PerfilGestionDTO(BaseModel):
             excepciones=[
                 ExcepcionGestionDTO.from_entity(excepcion, ahora) for excepcion in excepciones
             ],
+        )
+
+    model_config = {"from_attributes": True}
+
+
+class MovimientoReputacionDTO(BaseModel):
+    """DTO para representar un movimiento inmutable de la bitácora de reputación."""
+
+    id: UUID
+    usuario_id: UUID
+    tipo: TipoMovimientoReputacion
+    motivo: str
+    puntaje_anterior: int
+    variacion_puntos: int
+    puntaje_resultante: int
+    fecha_movimiento: datetime
+    numero_secuencia: int
+    sancion_id: UUID | None = None
+    prestamo_id: UUID | None = None
+    reserva_id: UUID | None = None
+    recurso_id: UUID | None = None
+    recurso_nombre: str | None = None
+
+    @classmethod
+    def from_entity(cls, mov: MovimientoReputacion) -> MovimientoReputacionDTO:
+        """Crea un MovimientoReputacionDTO desde una entidad MovimientoReputacion."""
+        return cls(
+            id=mov.id,
+            usuario_id=mov.usuario_id,
+            tipo=mov.tipo,
+            motivo=mov.motivo,
+            puntaje_anterior=mov.puntaje_anterior,
+            variacion_puntos=mov.variacion_puntos,
+            puntaje_resultante=mov.puntaje_resultante,
+            fecha_movimiento=mov.fecha_movimiento,
+            numero_secuencia=mov.numero_secuencia,
+            sancion_id=mov.sancion_id,
+            prestamo_id=mov.prestamo_id,
+            reserva_id=mov.reserva_id,
+            recurso_id=mov.recurso_id,
+            recurso_nombre=mov.recurso_nombre,
         )
 
     model_config = {"from_attributes": True}

@@ -17,6 +17,9 @@ export const obtenerPlantillaChecklist = (idPrestamo) =>
 export const consultarHistorial = (idUsuario) =>
   apiClient.get(`/prestamos/usuarios/${encodeURIComponent(idUsuario)}/historial`);
 
+export const consultarHistorialRecurso = (idRecurso) =>
+  apiClient.get(`/prestamos/recursos/${encodeURIComponent(idRecurso)}/historial`);
+
 export const listarTodosPrestamos = () => apiClient.get("/prestamos");
 
 export const iniciarEntrega = (idPrestamo, datosEntrega) =>

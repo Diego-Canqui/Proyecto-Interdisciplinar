@@ -92,6 +92,23 @@ class Reserva(BaseEntity):
             raise ValueError("solo una reserva confirmada puede convertirse en préstamo")
         self.estado = EstadoReserva.CONVERTIDA
 
+    def limite_recogida(self) -> datetime:
+        """Retorna el instante límite en UTC para recoger el recurso reservado."""
+        return min(
+            self._a_utc(self.fecha_inicio) + timedelta(minutes=30),
+            self._a_utc(self.fecha_fin),
+        )
+
+    def vencer(self) -> None:
+        """Marca una reserva pendiente o confirmada como vencida."""
+        if self.estado in {
+            EstadoReserva.CANCELADA,
+            EstadoReserva.VENCIDA,
+            EstadoReserva.CONVERTIDA,
+        }:
+            raise ValueError("la reserva no se puede vencer en su estado actual")
+        self.estado = EstadoReserva.VENCIDA
+
     def esta_vigente(self, fecha_actual: datetime | None = None) -> bool:
         fecha_actual = fecha_actual or datetime.now(tz=self.fecha_fin.tzinfo)
         return (

@@ -1,6 +1,8 @@
 """Tests de integración para ReputacionService (application + DB)."""
 from __future__ import annotations
 
+import csv
+import io
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -17,6 +19,7 @@ from prestamos_recursos.contexts.identidad_reputacion.application.dto.autenticac
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
     ElegibilidadDTO,
     ExcepcionAcademicaDTO,
+    MovimientoReputacionDTO,
     PerfilGestionDTO,
     PerfilReputacionDTO,
     SancionDTO,
@@ -32,6 +35,9 @@ from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_ser
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import (
     ExcepcionAcademica,
 )
+from prestamos_recursos.contexts.identidad_reputacion.domain.entities.movimiento_reputacion import (
+    MovimientoReputacion,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import (
     PerfilReputacion,
 )
@@ -42,7 +48,16 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.enums.estado_excepc
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
     NivelReputacion,
 )
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_movimiento_reputacion import (
+    TipoMovimientoReputacion,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_sancion import TipoSancion
+from prestamos_recursos.contexts.identidad_reputacion.domain.repositories.movimiento_reputacion_repository import (
+    MovimientoReputacionRepository,
+)
+from prestamos_recursos.contexts.identidad_reputacion.domain.value_objects.puntaje_reputacion import (
+    PuntajeReputacion,
+)
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
     SqlExcepcionAcademicaRepository,
 )
@@ -53,6 +68,42 @@ from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositorie
     SqlUsuarioRepository,
 )
 from prestamos_recursos.shared.database import Base, SessionLocal, engine
+
+
+class InMemoryMovimientoReputacionRepository(MovimientoReputacionRepository):
+    """Repositorio en memoria para probar T3 sin acoplarse al repositorio SQL de T2."""
+
+    def __init__(self) -> None:
+        self._movimientos: list[MovimientoReputacion] = []
+
+    @staticmethod
+    def _clave_orden(mov: MovimientoReputacion) -> tuple[datetime, int]:
+        fecha = mov.fecha_movimiento
+        if fecha.tzinfo is None:
+            fecha = fecha.replace(tzinfo=UTC)
+        return (fecha, mov.numero_secuencia)
+
+    def registrar(self, movimiento: MovimientoReputacion) -> None:
+        self._movimientos.append(movimiento)
+
+    def obtener_por_usuario(self, usuario_id: UUID) -> list[MovimientoReputacion]:
+        del_usuario = [m for m in self._movimientos if m.usuario_id == usuario_id]
+        return sorted(del_usuario, key=self._clave_orden, reverse=True)
+
+    def obtener_todos(self) -> list[MovimientoReputacion]:
+        return sorted(self._movimientos, key=self._clave_orden, reverse=True)
+
+    def contar_por_usuario(self, usuario_id: UUID) -> int:
+        return sum(1 for m in self._movimientos if m.usuario_id == usuario_id)
+
+    def obtener_siguiente_secuencia(self, usuario_id: UUID) -> int:
+        return (
+            max(
+                (m.numero_secuencia for m in self._movimientos if m.usuario_id == usuario_id),
+                default=0,
+            )
+            + 1
+        )
 
 
 @pytest.fixture(scope="function")
@@ -86,13 +137,23 @@ def excepcion_repo(db_session):
 
 
 @pytest.fixture
+def movimiento_repo():
+    return InMemoryMovimientoReputacionRepository()
+
+
+@pytest.fixture
 def auth_service(usuario_repo):
     return AutenticacionService(usuario_repo)
 
 
 @pytest.fixture
-def reputacion_service(perfil_repo, excepcion_repo, usuario_repo):
-    return ReputacionService(perfil_repo, excepcion_repo, usuario_repo)
+def reputacion_service(perfil_repo, excepcion_repo, usuario_repo, movimiento_repo):
+    return ReputacionService(
+        perfil_repo,
+        excepcion_repo,
+        usuario_repo,
+        movimiento_reputacion_repository=movimiento_repo,
+    )
 
 
 @pytest.fixture
@@ -852,3 +913,393 @@ class TestConsultasLecturaReputacionService:
         elegibilidad = reputacion_service.consultar_elegibilidad_lectura(usuario_creado)
         assert elegibilidad.elegible is False
         assert "tienes una sanción vigente de tipo DANO_PARCIAL" in elegibilidad.razon
+
+
+@pytest.mark.integration
+class TestBitacoraMovimientosReputacionService:
+    """Tests de bitácora cronológica de movimientos y exportación CSV (Spec 011, T3)."""
+
+    @staticmethod
+    def _crear_usuario(
+        auth_service: AutenticacionService,
+        nombre: str = "Ana Gómez",
+        correo: str | None = None,
+    ) -> UUID:
+        datos = CrearUsuarioDTO(
+            nombre=nombre,
+            correo=correo or f"ana-{uuid4().hex}@example.com",
+            telefono="+34 600 111 222",
+            password="Password123",
+        )
+        return auth_service.registrar_usuario(datos).usuario.id
+
+    @staticmethod
+    def _parsear_csv(contenido: str) -> tuple[list[str], list[dict[str, str]]]:
+        assert contenido.startswith("\ufeff")
+        reader = csv.DictReader(io.StringIO(contenido.lstrip("\ufeff")))
+        return list(reader.fieldnames or []), list(reader)
+
+    def test_premiar_entrega_y_devolucion_registran_tipos_distintos_y_metadatos(
+        self, reputacion_service, usuario_creado
+    ):
+        """RF-01: entrega puntual y devolución puntual se registran con su tipo propio y recurso."""
+        prestamo_id = uuid4()
+        reserva_id = uuid4()
+        recurso_id = uuid4()
+
+        reputacion_service.premiar_entrega_puntual(
+            usuario_creado,
+            prestamo_id=prestamo_id,
+            reserva_id=reserva_id,
+            recurso_id=recurso_id,
+            recurso_nombre="Laptop Dell",
+        )
+        reputacion_service.premiar_devolucion_puntual(
+            usuario_creado,
+            prestamo_id=prestamo_id,
+            reserva_id=reserva_id,
+            recurso_id=recurso_id,
+            recurso_nombre="Laptop Dell",
+        )
+
+        movimientos = reputacion_service.listar_movimientos_usuario(usuario_creado)
+
+        assert len(movimientos) == 2
+        assert all(isinstance(m, MovimientoReputacionDTO) for m in movimientos)
+        # Del más reciente al más antiguo
+        devolucion, entrega = movimientos[0], movimientos[1]
+        assert devolucion.tipo == TipoMovimientoReputacion.BONIFICACION_DEVOLUCION_PUNTUAL
+        assert devolucion.puntaje_anterior == 510
+        assert devolucion.variacion_puntos == 10
+        assert devolucion.puntaje_resultante == 520
+        assert devolucion.numero_secuencia == 2
+
+        assert entrega.tipo == TipoMovimientoReputacion.BONIFICACION_ENTREGA_PUNTUAL
+        assert entrega.puntaje_anterior == 500
+        assert entrega.variacion_puntos == 10
+        assert entrega.puntaje_resultante == 510
+        assert entrega.numero_secuencia == 1
+        assert entrega.prestamo_id == prestamo_id
+        assert entrega.reserva_id == reserva_id
+        assert entrega.recurso_id == recurso_id
+        assert entrega.recurso_nombre == "Laptop Dell"
+
+    def test_variacion_real_en_tope_1000_y_piso_0(
+        self, reputacion_service, perfil_repo, auth_service, usuario_creado
+    ):
+        """RF-02/CL-1/CL-2: en 1000 y 0 registra la variación real (+5, 0, -10, 0)."""
+        perfil_tope = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=usuario_creado,
+            puntaje=PuntajeReputacion(995),
+            nivel=NivelReputacion.EXCELENTE,
+            fecha_actualizacion=datetime.now(UTC) - timedelta(hours=1),
+        )
+        perfil_repo.guardar(perfil_tope)
+
+        reputacion_service.premiar_entrega_puntual(usuario_creado, recurso_nombre="Cámara")
+        reputacion_service.premiar_devolucion_puntual(usuario_creado, recurso_nombre="Cámara")
+
+        movs_tope = reputacion_service.listar_movimientos_usuario(usuario_creado)
+        # [BONIF_DEVOLUCION(1000->1000, 0), BONIF_ENTREGA(995->1000, +5), SALDO_HEREDADO(500->995)]
+        assert len(movs_tope) == 3
+        assert movs_tope[0].variacion_puntos == 0
+        assert movs_tope[0].puntaje_anterior == 1000
+        assert movs_tope[0].puntaje_resultante == 1000
+        assert movs_tope[1].variacion_puntos == 5
+        assert movs_tope[1].puntaje_anterior == 995
+        assert movs_tope[1].puntaje_resultante == 1000
+
+        otro_usuario = self._crear_usuario(auth_service)
+        perfil_piso = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=otro_usuario,
+            puntaje=PuntajeReputacion(10),
+            nivel=NivelReputacion.BAJO,
+            fecha_actualizacion=datetime.now(UTC) - timedelta(hours=1),
+        )
+        perfil_repo.guardar(perfil_piso)
+
+        reputacion_service.aplicar_sancion(otro_usuario, TipoSancion.DANO_PARCIAL, "Daño grave")
+        reputacion_service.aplicar_sancion(
+            otro_usuario, TipoSancion.INASISTENCIA_RESERVA, "No asistió"
+        )
+
+        movs_piso = reputacion_service.listar_movimientos_usuario(otro_usuario)
+        assert len(movs_piso) == 3
+        assert movs_piso[0].variacion_puntos == 0
+        assert movs_piso[0].puntaje_anterior == 0
+        assert movs_piso[0].puntaje_resultante == 0
+        assert movs_piso[1].variacion_puntos == -10
+        assert movs_piso[1].puntaje_anterior == 10
+        assert movs_piso[1].puntaje_resultante == 0
+
+    def test_doble_sancion_encadena_saldos_y_guarda_sancion_id(
+        self, reputacion_service, usuario_creado
+    ):
+        """RF-02/CL-4: daño seguido de tardanza encadena 500 -> 470 -> 460 en orden determinista."""
+        prestamo_id = uuid4()
+        recurso_id = uuid4()
+
+        s1 = reputacion_service.aplicar_sancion(
+            usuario_creado,
+            TipoSancion.DANO_PARCIAL,
+            "Daños físicos en recepción: Pantalla quebrada",
+            prestamo_id=prestamo_id,
+            recurso_id=recurso_id,
+            recurso_nombre="Proyector Epson",
+        )
+        s2 = reputacion_service.aplicar_sancion(
+            usuario_creado,
+            TipoSancion.TARDANZA,
+            "Devolución tardía",
+            dias_retardo=2,
+            prestamo_id=prestamo_id,
+            recurso_id=recurso_id,
+            recurso_nombre="Proyector Epson",
+        )
+
+        movs = reputacion_service.listar_movimientos_usuario(usuario_creado)
+        assert len(movs) == 2
+        assert movs[0].sancion_id == s2.id
+        assert movs[0].puntaje_anterior == 470
+        assert movs[0].variacion_puntos == -10
+        assert movs[0].puntaje_resultante == 460
+        assert movs[1].sancion_id == s1.id
+        assert movs[1].puntaje_anterior == 500
+        assert movs[1].variacion_puntos == -30
+        assert movs[1].puntaje_resultante == 470
+        assert movs[0].recurso_nombre == "Proyector Epson"
+
+    def test_saldo_inicial_heredado_virtual_en_lectura_y_unico_al_escribir(
+        self, reputacion_service, perfil_repo, movimiento_repo, usuario_creado
+    ):
+        """RF-03/CL-3: saldo != 500 sin movimientos muestra saldo heredado sin mutar BD y lo persiste 1 sola vez."""
+        fecha_legacy = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
+        perfil_legacy = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=usuario_creado,
+            puntaje=PuntajeReputacion(470),
+            nivel=NivelReputacion.NORMAL,
+            fecha_actualizacion=fecha_legacy,
+        )
+        perfil_repo.guardar(perfil_legacy)
+
+        # Dos lecturas consecutivas no persisten en repositorio
+        lectura_1 = reputacion_service.listar_movimientos_usuario(usuario_creado)
+        lectura_2 = reputacion_service.listar_movimientos_usuario(usuario_creado)
+
+        assert movimiento_repo.contar_por_usuario(usuario_creado) == 0
+        assert len(lectura_1) == 1
+        assert len(lectura_2) == 1
+        assert lectura_1[0].tipo == TipoMovimientoReputacion.SALDO_INICIAL_HEREDADO
+        assert lectura_1[0].motivo == "Saldo previo a bitácora"
+        assert lectura_1[0].puntaje_anterior == 500
+        assert lectura_1[0].variacion_puntos == -30
+        assert lectura_1[0].puntaje_resultante == 470
+        assert lectura_1[0].numero_secuencia == 1
+
+        # Primer movimiento real persiste SALDO_INICIAL_HEREDADO una sola vez
+        reputacion_service.aplicar_sancion(
+            usuario_creado, TipoSancion.TARDANZA, "Devolución tardía", dias_retardo=1
+        )
+        assert movimiento_repo.contar_por_usuario(usuario_creado) == 2
+
+        # Segundo movimiento real NO duplica SALDO_INICIAL_HEREDADO
+        reputacion_service.premiar_devolucion_puntual(usuario_creado)
+        assert movimiento_repo.contar_por_usuario(usuario_creado) == 3
+
+        movs = reputacion_service.listar_movimientos_usuario(usuario_creado)
+        tipos = [m.tipo for m in movs]
+        assert tipos == [
+            TipoMovimientoReputacion.BONIFICACION_DEVOLUCION_PUNTUAL,
+            TipoMovimientoReputacion.SANCION,
+            TipoMovimientoReputacion.SALDO_INICIAL_HEREDADO,
+        ]
+        assert movs[-1].fecha_movimiento == fecha_legacy
+        assert movs[-1].numero_secuencia == 1
+
+    def test_perfil_en_500_sin_movimientos_no_emite_saldo_heredado(
+        self, reputacion_service, usuario_creado
+    ):
+        """RF-03: perfil en 500 con 0 movimientos devuelve lista vacía."""
+        reputacion_service.obtener_perfil(usuario_creado)
+        assert reputacion_service.listar_movimientos_usuario(usuario_creado) == []
+
+    def test_listar_movimientos_usuario_inexistente_lanza_error(self, reputacion_service):
+        """RF-04/RF-23: usuario no existente lanza UsuarioNoEncontrado."""
+        with pytest.raises(UsuarioNoEncontrado):
+            reputacion_service.listar_movimientos_usuario(uuid4())
+
+    def test_amnistia_mensual_registra_saldo_heredado_y_movimiento_solo_a_premiados(
+        self, reputacion_service, perfil_repo, movimiento_repo, auth_service, usuario_creado
+    ):
+        """RF-01/RF-03: amnistía registra SALDO_INICIAL_HEREDADO + AMNISTIA_MENSUAL en premiados."""
+        otro_usuario = self._crear_usuario(auth_service)
+        fecha_legacy = datetime.now(UTC) - timedelta(days=40)
+
+        # Elegible (280 BAJO, sin sanciones recientes)
+        perfil_repo.guardar(
+            PerfilReputacion(
+                id=uuid4(),
+                usuario_id=usuario_creado,
+                puntaje=PuntajeReputacion(280),
+                nivel=NivelReputacion.BAJO,
+                fecha_actualizacion=fecha_legacy,
+            )
+        )
+        # Excluido (250 BAJO, sanción reciente)
+        perfil_excluido = PerfilReputacion(
+            id=uuid4(),
+            usuario_id=otro_usuario,
+            puntaje=PuntajeReputacion(280),
+            nivel=NivelReputacion.BAJO,
+            fecha_actualizacion=fecha_legacy,
+        )
+        perfil_excluido.aplicar_sancion(
+            Sancion(
+                id=uuid4(),
+                tipo=TipoSancion.DANO_PARCIAL,
+                puntos_descuento=-30,
+                monto_descuento=Decimal(50),
+                motivo="Sanción reciente",
+                fecha_aplicacion=datetime.now(UTC) - timedelta(days=5),
+                fecha_fin=datetime.now(UTC) + timedelta(days=25),
+                activa=True,
+            )
+        )
+        perfil_repo.guardar(perfil_excluido)
+
+        premiados = reputacion_service.ejecutar_amnistia_mensual()
+
+        assert premiados == 1
+        movs_premiado = reputacion_service.listar_movimientos_usuario(usuario_creado)
+        assert [m.tipo for m in movs_premiado] == [
+            TipoMovimientoReputacion.AMNISTIA_MENSUAL,
+            TipoMovimientoReputacion.SALDO_INICIAL_HEREDADO,
+        ]
+        assert movs_premiado[0].puntaje_anterior == 280
+        assert movs_premiado[0].variacion_puntos == 25
+        assert movs_premiado[0].puntaje_resultante == 305
+        assert movimiento_repo.contar_por_usuario(otro_usuario) == 0
+
+    def test_compatibilidad_sin_repositorio_de_movimientos(
+        self, perfil_repo, excepcion_repo, usuario_repo, usuario_creado
+    ):
+        """Compatibilidad: ReputacionService sigue funcionando con movimiento_reputacion_repository=None."""
+        servicio_sin_repo = ReputacionService(perfil_repo, excepcion_repo, usuario_repo)
+
+        servicio_sin_repo.premiar_entrega_puntual(usuario_creado)
+        servicio_sin_repo.aplicar_sancion(
+            usuario_creado, TipoSancion.TARDANZA, "Tardanza", dias_retardo=1
+        )
+        perfil = servicio_sin_repo.obtener_perfil(usuario_creado)
+        assert perfil.puntaje == 500
+        assert servicio_sin_repo.listar_movimientos_usuario(usuario_creado) == []
+
+    def test_exportar_csv_usuario_sin_movimientos_solo_encabezados(
+        self, reputacion_service, usuario_creado
+    ):
+        """RF-05/CL-5: alumno sin movimientos produce CSV UTF-8 con BOM y solo encabezados."""
+        nombre_archivo, contenido = reputacion_service.exportar_csv_usuario(usuario_creado)
+
+        assert nombre_archivo.endswith(".csv")
+        headers, filas = self._parsear_csv(contenido)
+        assert headers == [
+            "Usuario",
+            "Correo",
+            "Fecha",
+            "Evento",
+            "Motivo",
+            "Recurso",
+            "Puntaje anterior",
+            "Variación",
+            "Puntaje resultante",
+        ]
+        assert filas == []
+
+    def test_exportar_csv_usuario_inexistente_lanza_error(self, reputacion_service):
+        """RF-05/RF-23: exportar CSV de usuario inexistente lanza UsuarioNoEncontrado."""
+        with pytest.raises(UsuarioNoEncontrado):
+            reputacion_service.exportar_csv_usuario(uuid4())
+
+    def test_exportar_csv_usuario_sanea_formulas_y_conserva_variacion_numerica(
+        self, reputacion_service, auth_service
+    ):
+        """RF-05/RNF-3: protege textos contra fórmulas CSV sin alterar Variación numérica ni exponer hash."""
+        uid = self._crear_usuario(
+            auth_service,
+            nombre="=CMD('calc')",
+            correo="+admin@example.com",
+        )
+
+        reputacion_service.premiar_entrega_puntual(uid, recurso_nombre="@Proyector")
+        reputacion_service.aplicar_sancion(
+            uid,
+            TipoSancion.TARDANZA,
+            "-1+1=malicioso",
+            dias_retardo=2,
+            recurso_nombre="\tMicroscopio",
+        )
+        reputacion_service.aplicar_sancion(
+            uid,
+            TipoSancion.DANO_PARCIAL,
+            "\rDaño detectado",
+            recurso_nombre="Osciloscopio",
+        )
+
+        _, contenido = reputacion_service.exportar_csv_usuario(uid)
+        _, filas = self._parsear_csv(contenido)
+
+        assert len(filas) == 3
+        assert "Password123" not in contenido
+        assert "$2b$" not in contenido
+
+        # Orden más reciente -> más antiguo
+        fila_cr, fila_tab, fila_bono = filas[0], filas[1], filas[2]
+        assert fila_cr["Usuario"] == "'=CMD('calc')"
+        assert fila_cr["Correo"] == "'+admin@example.com"
+        assert fila_cr["Motivo"] == "'\rDaño detectado"
+        assert fila_cr["Recurso"] == "Osciloscopio"
+        assert fila_cr["Variación"] == "-30"
+
+        assert fila_tab["Motivo"] == "'-1+1=malicioso"
+        assert fila_tab["Recurso"] == "'\tMicroscopio"
+        assert fila_tab["Variación"] == "-10"
+
+        assert fila_bono["Recurso"] == "'@Proyector"
+        assert fila_bono["Evento"] == TipoMovimientoReputacion.BONIFICACION_ENTREGA_PUNTUAL.value
+        assert fila_bono["Variación"] == "10"
+        assert fila_bono["Puntaje anterior"] == "500"
+        assert fila_bono["Puntaje resultante"] == "510"
+
+    def test_exportar_csv_global_incluye_todos_y_saldo_heredado_sin_mutar_bd(
+        self, reputacion_service, perfil_repo, movimiento_repo, auth_service, usuario_creado
+    ):
+        """RF-05/RF-03: CSV global incluye movimientos persistidos y saldos heredados (!= 500) sin mutar BD."""
+        usuario_legacy = self._crear_usuario(auth_service, nombre="Usuario Legacy")
+        usuario_500 = self._crear_usuario(auth_service, nombre="Usuario Normal")
+
+        reputacion_service.premiar_entrega_puntual(usuario_creado, recurso_nombre="Multímetro")
+        perfil_repo.guardar(
+            PerfilReputacion(
+                id=uuid4(),
+                usuario_id=usuario_legacy,
+                puntaje=PuntajeReputacion(470),
+                nivel=NivelReputacion.NORMAL,
+                fecha_actualizacion=datetime.now(UTC) - timedelta(days=5),
+            )
+        )
+        reputacion_service.obtener_perfil(usuario_500)  # 500 puntos, 0 movimientos
+
+        nombre_archivo, contenido = reputacion_service.exportar_csv_global()
+        assert nombre_archivo.endswith(".csv")
+        headers, filas = self._parsear_csv(contenido)
+        assert headers[0] == "Usuario"
+        assert len(filas) == 2
+        assert {f["Usuario"] for f in filas} == {"Juan Pérez", "Usuario Legacy"}
+        fila_legacy = next(f for f in filas if f["Usuario"] == "Usuario Legacy")
+        assert fila_legacy["Evento"] == TipoMovimientoReputacion.SALDO_INICIAL_HEREDADO.value
+        assert fila_legacy["Variación"] == "-30"
+        # Lectura global no persiste el saldo heredado en BD
+        assert movimiento_repo.contar_por_usuario(usuario_legacy) == 0

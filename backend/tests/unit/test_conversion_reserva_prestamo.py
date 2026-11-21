@@ -157,7 +157,7 @@ def test_convertir_reserva_confirmada_crea_prestamo_activo():
     assert prestamo.recurso_id == reserva.recurso_id
     assert prestamo.fecha_inicio == reserva.fecha_inicio
     assert prestamo.fecha_fin == reserva.fecha_fin
-    assert prestamo.estado == EstadoPrestamo.ACTIVO
+    assert prestamo.estado == EstadoPrestamo.POR_ENTREGAR
     assert reserva.estado == EstadoReserva.CONVERTIDA
     assert reserva_repository.saved == [reserva]
     assert recurso_repository.recurso.estado == EstadoRecurso.EN_USO
@@ -1115,23 +1115,45 @@ def test_convertir_a_prestamo_valida_ventana_temporal():
     recurso_repo = FakeRecursoRepository()
     service = ReservaService(repo, make_prestamo_service(prestamo_repo, recurso_repo))
 
-    # Demasiado temprano: 1h y 1 minuto antes (12:59) -> ValueError
+    # Demasiado temprano: 1h y 1 minuto antes (12:59) -> ValueError (no vence la reserva)
     with pytest.raises(
         ValueError,
-        match="el préstamo solo puede iniciarse desde 1 hora antes del horario reservado y hasta antes de su vencimiento",
+        match="el préstamo solo puede iniciarse desde 1 hora antes del horario reservado",
     ):
         service.convertir_a_prestamo(reserva.id, ahora=inicio - timedelta(hours=1, minutes=1))
-
-    # Demasiado tarde: después de fecha_fin (16:01) -> ValueError
-    with pytest.raises(
-        ValueError,
-        match="el préstamo solo puede iniciarse desde 1 hora antes del horario reservado y hasta antes de su vencimiento",
-    ):
-        service.convertir_a_prestamo(reserva.id, ahora=fin + timedelta(minutes=1))
+    assert reserva.estado == EstadoReserva.CONFIRMADA
 
     # Exactamente 1 hora antes (13:00) -> permitido
     assert service.convertir_a_prestamo(reserva.id, ahora=inicio - timedelta(hours=1)) is True
     assert reserva.estado == EstadoReserva.CONVERTIDA
+
+
+def test_convertir_a_prestamo_expira_y_rechaza_despues_de_limite_recogida():
+    u_id = uuid4()
+    r_id = uuid4()
+    inicio = datetime(2026, 11, 2, 14, 0, tzinfo=timezone.utc)
+    fin = datetime(2026, 11, 2, 16, 0, tzinfo=timezone.utc)
+
+    reserva = Reserva(
+        usuario_id=u_id,
+        recurso_id=r_id,
+        fecha_inicio=inicio,
+        fecha_fin=fin,
+        estado=EstadoReserva.CONFIRMADA,
+    )
+    repo = FakeReservaRepository(reserva)
+    prestamo_repo = FakePrestamoRepository()
+    recurso_repo = FakeRecursoRepository()
+    service = ReservaService(repo, make_prestamo_service(prestamo_repo, recurso_repo))
+
+    # Pasado el límite de recogida (14:31) -> expira a VENCIDA y rechaza
+    with pytest.raises(
+        ValueError,
+        match="la reserva expiró por superar el tiempo límite de recogida",
+    ):
+        service.convertir_a_prestamo(reserva.id, ahora=inicio + timedelta(minutes=31))
+    assert reserva.estado == EstadoReserva.VENCIDA
+    assert prestamo_repo.saved == []
 
 
 

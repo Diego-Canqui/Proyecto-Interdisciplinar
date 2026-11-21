@@ -761,5 +761,137 @@ class TestPerfilGestionDTO:
         ]
 
 
+@pytest.mark.unit
+class TestMovimientoReputacionDTO:
+    """Tests para MovimientoReputacionDTO y preservación de contratos DTO previos."""
+
+    def test_from_entity_con_campos_completos(self):
+        """from_entity() mapea todos los campos incluyendo referencias opcionales."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            MovimientoReputacionDTO,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.movimiento_reputacion import (
+            MovimientoReputacion,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_movimiento_reputacion import (
+            TipoMovimientoReputacion,
+        )
+
+        ahora = datetime(2026, 11, 18, 13, 0, tzinfo=UTC)
+        mov = MovimientoReputacion(
+            id=uuid4(),
+            usuario_id=uuid4(),
+            tipo=TipoMovimientoReputacion.SANCION,
+            motivo="Devolución tardía",
+            puntaje_anterior=500,
+            variacion_puntos=-10,
+            puntaje_resultante=490,
+            fecha_movimiento=ahora,
+            numero_secuencia=2,
+            sancion_id=uuid4(),
+            prestamo_id=uuid4(),
+            reserva_id=uuid4(),
+            recurso_id=uuid4(),
+            recurso_nombre="Proyector Epson",
+        )
+
+        dto = MovimientoReputacionDTO.from_entity(mov)
+
+        assert list(MovimientoReputacionDTO.model_fields) == [
+            "id",
+            "usuario_id",
+            "tipo",
+            "motivo",
+            "puntaje_anterior",
+            "variacion_puntos",
+            "puntaje_resultante",
+            "fecha_movimiento",
+            "numero_secuencia",
+            "sancion_id",
+            "prestamo_id",
+            "reserva_id",
+            "recurso_id",
+            "recurso_nombre",
+        ]
+        assert dto.id == mov.id
+        assert dto.usuario_id == mov.usuario_id
+        assert dto.tipo == TipoMovimientoReputacion.SANCION
+        assert dto.motivo == "Devolución tardía"
+        assert dto.puntaje_anterior == 500
+        assert dto.variacion_puntos == -10
+        assert dto.puntaje_resultante == 490
+        assert dto.fecha_movimiento == ahora
+        assert dto.numero_secuencia == 2
+        assert dto.sancion_id == mov.sancion_id
+        assert dto.prestamo_id == mov.prestamo_id
+        assert dto.reserva_id == mov.reserva_id
+        assert dto.recurso_id == mov.recurso_id
+        assert dto.recurso_nombre == "Proyector Epson"
+        assert MovimientoReputacionDTO.model_config.get("from_attributes") is True
+
+    def test_from_entity_con_opcionales_en_none(self):
+        """from_entity() conserva None en referencias opcionales cuando no aplican."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            MovimientoReputacionDTO,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.entities.movimiento_reputacion import (
+            MovimientoReputacion,
+        )
+        from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_movimiento_reputacion import (
+            TipoMovimientoReputacion,
+        )
+
+        mov = MovimientoReputacion(
+            usuario_id=uuid4(),
+            tipo=TipoMovimientoReputacion.AMNISTIA_MENSUAL,
+            motivo="Amnistía mensual",
+            puntaje_anterior=280,
+            variacion_puntos=25,
+            puntaje_resultante=305,
+        )
+
+        dto = MovimientoReputacionDTO.from_entity(mov)
+
+        assert dto.sancion_id is None
+        assert dto.prestamo_id is None
+        assert dto.reserva_id is None
+        assert dto.recurso_id is None
+        assert dto.recurso_nombre is None
+
+    def test_otros_dtos_previos_conservan_campos_exactos(self):
+        """ExcepcionAcademicaDTO, ExcepcionGestionDTO y PerfilGestionDTO no cambian sus campos."""
+        from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
+            ExcepcionAcademicaDTO,
+            ExcepcionGestionDTO,
+            PerfilGestionDTO,
+        )
+
+        assert list(ExcepcionAcademicaDTO.model_fields) == [
+            "id",
+            "usuario_id",
+            "motivo",
+            "fecha_inicio",
+            "fecha_fin",
+            "activa",
+        ]
+        assert list(ExcepcionGestionDTO.model_fields) == [
+            "id",
+            "motivo",
+            "fecha_inicio",
+            "fecha_fin",
+            "activa",
+            "vigente",
+            "estado",
+        ]
+        assert list(PerfilGestionDTO.model_fields) == [
+            "usuario_id",
+            "puntaje",
+            "nivel",
+            "fecha_actualizacion",
+            "sanciones",
+            "excepciones",
+        ]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

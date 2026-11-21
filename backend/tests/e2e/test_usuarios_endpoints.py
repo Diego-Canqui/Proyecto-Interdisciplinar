@@ -22,6 +22,7 @@ def setup_database():
     )
     from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models import (  # noqa: F401
         excepcion_academica_model,
+        movimiento_reputacion_model,
         perfil_reputacion_model,
         usuario_model,
     )
@@ -434,7 +435,7 @@ class TestEliminarUsuarioEndpoint:
                 reserva_id=uuid4(),
                 recurso_id=uuid4(),
                 usuario_id=user_id,
-                estado=EstadoPrestamo.ACTIVO,
+                estado=EstadoPrestamo.POR_ENTREGAR,
                 fecha_inicio=datetime.now(UTC),
                 fecha_fin=datetime.now(UTC) + timedelta(days=2),
             )

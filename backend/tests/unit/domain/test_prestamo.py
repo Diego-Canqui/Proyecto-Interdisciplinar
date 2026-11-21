@@ -11,7 +11,7 @@ def _crear_prestamo(
     *,
     inicio: datetime | None = None,
     fin: datetime | None = None,
-    estado: EstadoPrestamo = EstadoPrestamo.ACTIVO,
+    estado: EstadoPrestamo = EstadoPrestamo.POR_ENTREGAR,
 ) -> Prestamo:
     fecha_inicio = inicio or datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
     fecha_fin = fin or datetime(2026, 10, 5, 18, 0, tzinfo=UTC)
@@ -29,7 +29,7 @@ def _crear_prestamo(
 def test_creacion_prestamo_valido():
     prestamo = _crear_prestamo()
     assert prestamo.id is not None
-    assert prestamo.estado == EstadoPrestamo.ACTIVO
+    assert prestamo.estado == EstadoPrestamo.POR_ENTREGAR
     assert prestamo.fecha_fin > prestamo.fecha_inicio
     assert prestamo.fecha_entrega_real is None
     assert prestamo.fecha_devolucion_real is None
@@ -37,7 +37,7 @@ def test_creacion_prestamo_valido():
 
 @pytest.mark.unit
 def test_marcar_entregado_registra_fecha_entrega_real():
-    prestamo = _crear_prestamo(estado=EstadoPrestamo.ACTIVO)
+    prestamo = _crear_prestamo(estado=EstadoPrestamo.POR_ENTREGAR)
     fecha_entrega = datetime(2026, 10, 1, 9, 30, tzinfo=UTC)
 
     prestamo.marcar_entregado(fecha_entrega)
@@ -49,7 +49,7 @@ def test_marcar_entregado_registra_fecha_entrega_real():
 
 @pytest.mark.unit
 def test_marcar_entregado_sin_fecha_usa_utc_actual():
-    prestamo = _crear_prestamo(estado=EstadoPrestamo.ACTIVO)
+    prestamo = _crear_prestamo(estado=EstadoPrestamo.POR_ENTREGAR)
     antes = datetime.now(UTC)
 
     prestamo.marcar_entregado()
@@ -62,9 +62,9 @@ def test_marcar_entregado_sin_fecha_usa_utc_actual():
 
 
 @pytest.mark.unit
-def test_marcar_entregado_no_activo_lanza_error():
+def test_marcar_entregado_no_por_entregar_lanza_error():
     prestamo = _crear_prestamo(estado=EstadoPrestamo.ENTREGADO)
-    with pytest.raises(ValueError, match="Sólo pueden marcarse como entregados préstamos activos"):
+    with pytest.raises(ValueError, match="POR_ENTREGAR"):
         prestamo.marcar_entregado()
     assert prestamo.fecha_entrega_real is None
 
@@ -83,7 +83,7 @@ def test_creacion_con_fechas_invalidas_lanza_error():
 def test_iniciar_prestamo():
     prestamo = _crear_prestamo()
     prestamo.iniciar()
-    assert prestamo.estado == EstadoPrestamo.ACTIVO
+    assert prestamo.estado == EstadoPrestamo.POR_ENTREGAR
 
 
 @pytest.mark.unit
@@ -95,6 +95,21 @@ def test_iniciar_prestamo_devuelto_o_cancelado_lanza_error():
     prestamo_cancelado = _crear_prestamo(estado=EstadoPrestamo.CANCELADO)
     with pytest.raises(ValueError, match="No se puede iniciar"):
         prestamo_cancelado.iniciar()
+
+
+@pytest.mark.unit
+def test_limite_recogida_ventana_normal_y_corta():
+    prestamo_normal = _crear_prestamo(
+        inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
+        fin=datetime(2026, 10, 1, 12, 0, tzinfo=UTC),
+    )
+    assert prestamo_normal.limite_recogida() == datetime(2026, 10, 1, 10, 30, tzinfo=UTC)
+
+    prestamo_corto = _crear_prestamo(
+        inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
+        fin=datetime(2026, 10, 1, 10, 20, tzinfo=UTC),
+    )
+    assert prestamo_corto.limite_recogida() == datetime(2026, 10, 1, 10, 20, tzinfo=UTC)
 
 
 @pytest.mark.unit
@@ -141,7 +156,7 @@ def test_devolver_prestamo_con_retraso():
 
 
 @pytest.mark.unit
-def test_devolver_prestamo_vencido_permite_retornar_dias():
+def test_devolver_prestamo_vencido_es_valido():
     prestamo = _crear_prestamo(
         inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
         fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
@@ -157,97 +172,72 @@ def test_devolver_prestamo_vencido_permite_retornar_dias():
 @pytest.mark.unit
 def test_devolver_prestamo_ya_devuelto_lanza_error():
     prestamo = _crear_prestamo(estado=EstadoPrestamo.DEVUELTO)
-    with pytest.raises(ValueError, match="El préstamo ya fue devuelto"):
+    with pytest.raises(ValueError, match="ya fue devuelto"):
         prestamo.devolver()
 
 
 @pytest.mark.unit
 def test_devolver_prestamo_cancelado_lanza_error():
     prestamo = _crear_prestamo(estado=EstadoPrestamo.CANCELADO)
-    with pytest.raises(ValueError, match="No se puede devolver un préstamo cancelado"):
+    with pytest.raises(ValueError, match="cancelado"):
         prestamo.devolver()
 
 
 @pytest.mark.unit
-def test_devolver_prestamo_activo_lanza_error():
-    prestamo = _crear_prestamo(estado=EstadoPrestamo.ACTIVO)
-    with pytest.raises(ValueError, match="ACTIVO"):
+def test_devolver_prestamo_por_entregar_lanza_error():
+    prestamo = _crear_prestamo(estado=EstadoPrestamo.POR_ENTREGAR)
+    with pytest.raises(ValueError, match="POR_ENTREGAR"):
         prestamo.devolver()
 
 
 @pytest.mark.unit
-def test_vencer_prestamo_exitoso():
+def test_vencer_prestamo_entregado_exitoso():
     prestamo = _crear_prestamo(
         inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
         fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
-        estado=EstadoPrestamo.ACTIVO,
+        estado=EstadoPrestamo.ENTREGADO,
     )
-    fecha_actual = datetime(2026, 10, 6, 9, 0, tzinfo=UTC)
+    fecha_actual = datetime(2026, 10, 5, 18, 1, tzinfo=UTC)
     prestamo.vencer(fecha_actual)
 
     assert prestamo.estado == EstadoPrestamo.VENCIDO
 
 
 @pytest.mark.unit
-def test_vencer_prestamo_antes_de_tiempo_lanza_error():
-    prestamo = _crear_prestamo(
-        inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
-        fin=datetime(2026, 10, 5, 18, 0, tzinfo=UTC),
-    )
-    fecha_actual = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
-    with pytest.raises(ValueError, match="aún no ha superado su fecha de finalización"):
-        prestamo.vencer(fecha_actual)
-
-
-@pytest.mark.unit
-def test_vencer_prestamo_ya_devuelto_o_cancelado_lanza_error():
-    prestamo_dev = _crear_prestamo(estado=EstadoPrestamo.DEVUELTO)
-    with pytest.raises(ValueError, match="No se puede marcar como vencido"):
-        prestamo_dev.vencer(datetime(2026, 10, 10, tzinfo=UTC))
-
-    prestamo_canc = _crear_prestamo(estado=EstadoPrestamo.CANCELADO)
-    with pytest.raises(ValueError, match="No se puede marcar como vencido"):
-        prestamo_canc.vencer(datetime(2026, 10, 10, tzinfo=UTC))
-
-
-@pytest.mark.unit
-def test_solicitar_prorroga():
+def test_vencer_prestamo_en_limite_o_antes_lanza_error():
     fin = datetime(2026, 10, 5, 18, 0, tzinfo=UTC)
     prestamo = _crear_prestamo(
         inicio=datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
         fin=fin,
         estado=EstadoPrestamo.ENTREGADO,
     )
+    with pytest.raises(ValueError, match="aún no ha superado su fecha de finalización"):
+        prestamo.vencer(datetime(2026, 10, 4, 12, 0, tzinfo=UTC))
 
-    # Prórroga válida dentro del plazo
-    assert prestamo.solicitar_prorroga(dias=3, fecha_actual=datetime(2026, 10, 4, tzinfo=UTC)) is True
-
-    # Días no positivos
-    assert prestamo.solicitar_prorroga(dias=0) is False
-    assert prestamo.solicitar_prorroga(dias=-2) is False
-
-    # Fuera de plazo
-    assert (
-        prestamo.solicitar_prorroga(dias=3, fecha_actual=datetime(2026, 10, 6, tzinfo=UTC)) is False
-    )
-
-    # En estado ACTIVO o VENCIDO no permite prórroga
-    prestamo.estado = EstadoPrestamo.ACTIVO
-    assert prestamo.solicitar_prorroga(dias=3, fecha_actual=datetime(2026, 10, 4, tzinfo=UTC)) is False
-    prestamo.estado = EstadoPrestamo.VENCIDO
-    assert prestamo.solicitar_prorroga(dias=3) is False
+    with pytest.raises(ValueError, match="aún no ha superado su fecha de finalización"):
+        prestamo.vencer(fin)
 
 
 @pytest.mark.unit
-def test_renovar_deshabilitado_lanza_error():
-    fecha_inicio = datetime(2026, 10, 1, 10, 0, tzinfo=UTC)
-    fecha_fin = datetime(2026, 10, 5, 18, 0, tzinfo=UTC)
-    prestamo = _crear_prestamo(inicio=fecha_inicio, fin=fecha_fin, estado=EstadoPrestamo.ENTREGADO)
+@pytest.mark.parametrize(
+    "estado",
+    [
+        EstadoPrestamo.POR_ENTREGAR,
+        EstadoPrestamo.DEVUELTO,
+        EstadoPrestamo.CANCELADO,
+        EstadoPrestamo.VENCIDO,
+    ],
+)
+def test_vencer_prestamo_no_entregado_lanza_error(estado: EstadoPrestamo):
+    prestamo = _crear_prestamo(estado=estado)
+    with pytest.raises(ValueError, match="No se puede marcar como vencido"):
+        prestamo.vencer(datetime(2026, 10, 10, tzinfo=UTC))
 
-    with pytest.raises(ValueError, match="Renovación de préstamos no permitida"):
-        prestamo.renovar(dias=5, fecha_actual=datetime(2026, 10, 3, 12, 0, tzinfo=UTC))
 
-    assert prestamo.fecha_fin == fecha_fin
+@pytest.mark.unit
+def test_prestamo_sin_metodos_prorroga_ni_renovar():
+    assert not hasattr(Prestamo, "solicitar_prorroga")
+    assert not hasattr(Prestamo, "renovar")
 
 
 @pytest.mark.unit
@@ -275,7 +265,7 @@ def test_es_devolucion_puntual_antes_en_y_despues_de_fecha_fin():
 
 @pytest.mark.unit
 def test_cancelar_prestamo():
-    prestamo = _crear_prestamo(estado=EstadoPrestamo.ACTIVO)
+    prestamo = _crear_prestamo(estado=EstadoPrestamo.POR_ENTREGAR)
     prestamo.cancelar()
     assert prestamo.estado == EstadoPrestamo.CANCELADO
 
@@ -289,11 +279,10 @@ def test_cancelar_prestamo():
     "estado",
     [EstadoPrestamo.ENTREGADO, EstadoPrestamo.VENCIDO, EstadoPrestamo.CANCELADO],
 )
-def test_cancelar_prestamo_no_activo_lanza_error(estado: EstadoPrestamo):
+def test_cancelar_prestamo_no_por_entregar_lanza_error(estado: EstadoPrestamo):
     prestamo = _crear_prestamo(estado=estado)
     with pytest.raises(
-        ValueError, match="Solo se pueden cancelar préstamos pendientes de entrega física \\(ACTIVO\\)"
+        ValueError,
+        match="Solo se pueden cancelar préstamos pendientes de entrega física \\(POR_ENTREGAR\\)",
     ):
         prestamo.cancelar()
-
-

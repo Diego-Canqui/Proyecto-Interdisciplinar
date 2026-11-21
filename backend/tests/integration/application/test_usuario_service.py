@@ -381,3 +381,25 @@ class TestEliminarUsuario:
         assert exc.value.status_code == 409
         assert exc.value.detail == "No se puede eliminar un usuario con reservas activas o préstamos en curso"
 
+    def test_eliminar_usuario_con_prestamo_por_entregar_via_historial_409(self, usuario_repo):
+        """RF-03: Detecta préstamos POR_ENTREGAR en el respaldo consultar_historial."""
+        prestamo_por_entregar = MagicMock(estado="POR_ENTREGAR")
+        mock_prestamos = MagicMock(spec=["consultar_historial"])
+        mock_prestamos.consultar_historial.return_value = [prestamo_por_entregar]
+        service = UsuarioService(usuario_repo, prestamo_service=mock_prestamos)
+
+        creado = service.crear_usuario(_datos())
+        actor_admin = UsuarioDTO(
+            id=uuid4(),
+            nombre="Admin",
+            correo="admin@example.com",
+            telefono=None,
+            roles=[RolUsuario.ADMINISTRADOR_SISTEMA],
+            estado=True,
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            service.eliminar_usuario(creado.id, actor=actor_admin)
+        assert exc.value.status_code == 409
+        assert exc.value.detail == "No se puede eliminar un usuario con reservas activas o préstamos en curso"
+

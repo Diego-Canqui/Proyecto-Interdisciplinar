@@ -4,6 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from prestamos_recursos.contexts.catalogo.application.services import (
@@ -23,6 +24,9 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario i
 )
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
     SqlExcepcionAcademicaRepository,
+)
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_movimiento_reputacion_repository import (
+    SqlMovimientoReputacionRepository,
 )
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_perfil_reputacion_repository import (
     SqlPerfilReputacionRepository,
@@ -60,16 +64,18 @@ def obtener_servicio(
     sesion: Annotated[Session, Depends(get_session, scope="function")],
 ) -> ReservaService:
     catalogo = RecursoApplicationService(SqlRecursoRepository(sesion))
-    prestamos = PrestamoService(
-        SqlPrestamoRepository(sesion),
-        SqlChecklistRepository(sesion),
-        SqlGarantiaRepository(sesion),
-        catalogo_service=catalogo,
-    )
     reputacion = ReputacionService(
         SqlPerfilReputacionRepository(sesion),
         SqlExcepcionAcademicaRepository(sesion),
         SqlUsuarioRepository(sesion),
+        movimiento_reputacion_repository=SqlMovimientoReputacionRepository(sesion),
+    )
+    prestamos = PrestamoService(
+        SqlPrestamoRepository(sesion),
+        SqlChecklistRepository(sesion),
+        SqlGarantiaRepository(sesion),
+        reputacion_service=reputacion,
+        catalogo_service=catalogo,
     )
     return ReservaService(
         SqlReservaRepository(sesion),
@@ -211,12 +217,17 @@ def solicitar_prestamo(
     try:
         creado = servicio.convertir_a_prestamo(id_reserva)
     except ValueError as error:
+        if str(error) == "la reserva expiró por superar el tiempo límite de recogida":
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"detail": str(error)},
+            )
         codigo = 404 if str(error) == "Recurso no encontrado" else 409
         raise HTTPException(status_code=codigo, detail=str(error)) from error
     if not creado:
-        raise HTTPException(
+        return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
-            detail="la reserva debe estar confirmada para solicitar el préstamo",
+            content={"detail": "la reserva debe estar confirmada para solicitar el préstamo"},
         )
     return {"detalle": "Préstamo creado desde la reserva"}
 

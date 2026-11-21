@@ -1,6 +1,9 @@
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.excepcion_academica_model import (
     ExcepcionAcademicaModel,
 )
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.movimiento_reputacion_model import (
+    MovimientoReputacionModel,
+)
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.perfil_reputacion_model import (
     PerfilReputacionModel,
 )
@@ -10,6 +13,7 @@ from prestamos_recursos.contexts.identidad_reputacion.infrastructure.models.usua
 
 __all__ = [
     "ExcepcionAcademicaModel",
+    "MovimientoReputacionModel",
     "PerfilReputacionModel",
     "UsuarioModel",
 ]

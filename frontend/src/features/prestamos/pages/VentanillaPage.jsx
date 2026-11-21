@@ -27,11 +27,19 @@ const CLASE_ESTADO_RESERVA = {
 };
 
 const CLASE_ESTADO_PRESTAMO = {
-  ACTIVO: "insignia--info",
+  POR_ENTREGAR: "insignia--info",
   ENTREGADO: "insignia--exito",
   DEVUELTO: "insignia--neutra",
   VENCIDO: "insignia--error",
   CANCELADO: "insignia--neutra",
+};
+
+const ETIQUETA_ESTADO_PRESTAMO = {
+  POR_ENTREGAR: "Por entregar",
+  ENTREGADO: "Entregado",
+  DEVUELTO: "Devuelto",
+  VENCIDO: "Vencido",
+  CANCELADO: "Cancelado",
 };
 
 function mostrarFecha(fecha, textoVacio = "—") {
@@ -121,7 +129,7 @@ export default function VentanillaPage() {
     if (filtroEstado === "TODOS") return prestamos;
     if (filtroEstado === "EN_CURSO") {
       return prestamos.filter(
-        (p) => p.estado === "ACTIVO" || p.estado === "ENTREGADO" || p.estado === "VENCIDO"
+        (p) => p.estado === "POR_ENTREGAR" || p.estado === "ENTREGADO" || p.estado === "VENCIDO"
       );
     }
     return prestamos.filter((p) => p.estado === filtroEstado);
@@ -1015,7 +1023,7 @@ export default function VentanillaPage() {
             {[
               { valor: "TODOS", texto: "Todos" },
               { valor: "EN_CURSO", texto: "En curso" },
-              { valor: "ACTIVO", texto: "Por entregar" },
+              { valor: "POR_ENTREGAR", texto: "Por entregar" },
               { valor: "ENTREGADO", texto: "Entregados" },
               { valor: "VENCIDO", texto: "Vencidos" },
               { valor: "DEVUELTO", texto: "Devueltos" },
@@ -1089,12 +1097,12 @@ export default function VentanillaPage() {
                             CLASE_ESTADO_PRESTAMO[prestamo.estado] || "insignia--neutra"
                           }`}
                         >
-                          {prestamo.estado}
+                          {ETIQUETA_ESTADO_PRESTAMO[prestamo.estado] || prestamo.estado}
                         </span>
                       </td>
                       <td data-etiqueta="Acciones">
                         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                          {prestamo.estado === "ACTIVO" && (
+                          {prestamo.estado === "POR_ENTREGAR" && (
                             <>
                               <button
                                 type="button"

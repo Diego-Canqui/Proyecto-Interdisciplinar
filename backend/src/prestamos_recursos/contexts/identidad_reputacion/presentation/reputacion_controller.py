@@ -3,11 +3,13 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.reputacion_dto import (
     AplicarSancionDTO,
     ElegibilidadDTO,
     ExcepcionAcademicaDTO,
+    MovimientoReputacionDTO,
     PerfilGestionDTO,
     PerfilReputacionDTO,
     RegistrarExcepcionDTO,
@@ -26,6 +28,9 @@ from prestamos_recursos.contexts.identidad_reputacion.application.reputacion_ser
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario import RolUsuario
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
     SqlExcepcionAcademicaRepository,
+)
+from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_movimiento_reputacion_repository import (
+    SqlMovimientoReputacionRepository,
 )
 from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_perfil_reputacion_repository import (
     SqlPerfilReputacionRepository,
@@ -51,6 +56,7 @@ def get_reputacion_service(
         SqlPerfilReputacionRepository(session),
         SqlExcepcionAcademicaRepository(session),
         SqlUsuarioRepository(session),
+        movimiento_reputacion_repository=SqlMovimientoReputacionRepository(session),
     )
 
 
@@ -207,3 +213,54 @@ def ejecutar_amnistia(
     Lanza 401 si token inválido, 403 si no tiene rol requerido.
     """
     return ResultadoAmnistiaDTO(perfiles_premiados=service.ejecutar_amnistia_mensual())
+
+
+@router.get("/usuarios/{usuario_id}/movimientos", response_model=list[MovimientoReputacionDTO])
+def listar_movimientos_usuario(
+    usuario_id: UUID,
+    _usuario: UsuarioDTO = Depends(  # noqa: B008
+        require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)  # noqa: B008
+    ),
+    service: ReputacionService = Depends(get_reputacion_service),  # noqa: B008
+) -> list[MovimientoReputacionDTO]:
+    """Lista los movimientos cronológicos de reputación de un usuario (solo gestión)."""
+    try:
+        return service.listar_movimientos_usuario(usuario_id)
+    except UsuarioNoEncontrado as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/usuarios/{usuario_id}/movimientos/csv")
+def exportar_csv_movimientos_usuario(
+    usuario_id: UUID,
+    _usuario: UsuarioDTO = Depends(  # noqa: B008
+        require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)  # noqa: B008
+    ),
+    service: ReputacionService = Depends(get_reputacion_service),  # noqa: B008
+) -> Response:
+    """Descarga el historial cronológico de reputación de un usuario en formato CSV."""
+    try:
+        nombre_archivo, contenido = service.exportar_csv_usuario(usuario_id)
+    except UsuarioNoEncontrado as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return Response(
+        content=contenido,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nombre_archivo}"'},
+    )
+
+
+@router.get("/movimientos/csv")
+def exportar_csv_movimientos_global(
+    _usuario: UsuarioDTO = Depends(  # noqa: B008
+        require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)  # noqa: B008
+    ),
+    service: ReputacionService = Depends(get_reputacion_service),  # noqa: B008
+) -> Response:
+    """Descarga el historial cronológico global de reputación en formato CSV."""
+    nombre_archivo, contenido = service.exportar_csv_global()
+    return Response(
+        content=contenido,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nombre_archivo}"'},
+    )

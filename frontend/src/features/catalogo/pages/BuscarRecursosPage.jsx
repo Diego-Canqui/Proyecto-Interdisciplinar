@@ -7,7 +7,8 @@ import {
   actualizarRecurso,
   actualizarEstadoRecurso,
 } from "../api.js";
-import { obtenerPerfil } from "../../identidad/api.js";
+import { obtenerPerfil, listarUsuarios } from "../../identidad/api.js";
+import { consultarHistorialRecurso } from "../../prestamos/api.js";
 
 const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
 
@@ -473,6 +474,13 @@ export default function BuscarRecursosPage() {
   const [nuevoEstadoSeleccionado, setNuevoEstadoSeleccionado] = useState("");
   const [actualizandoEstado, setActualizandoEstado] = useState(false);
 
+  // Historial de préstamos del recurso (solo gestión)
+  const [mostrarHistorialRecurso, setMostrarHistorialRecurso] = useState(false);
+  const [historialRecurso, setHistorialRecurso] = useState([]);
+  const [cargandoHistorial, setCargandoHistorial] = useState(false);
+  const [errorHistorial, setErrorHistorial] = useState(null);
+  const [usuariosPorId, setUsuariosPorId] = useState({});
+
   const esGestion = Boolean(
     usuario?.roles?.some((rol) => ROLES_GESTION.includes(rol))
   );
@@ -506,6 +514,7 @@ export default function BuscarRecursosPage() {
   const handleSeleccionarRecurso = async (recurso) => {
     setRecursoSeleccionado(recurso);
     setNuevoEstadoSeleccionado(recurso.estado);
+    setMostrarHistorialRecurso(false);
     setFichaTecnica(null);
     setCargandoFicha(true);
     try {
@@ -557,6 +566,7 @@ export default function BuscarRecursosPage() {
     const origen = fichaTecnica || recursoSeleccionado;
     if (!origen) return;
     setMostrarModalCrear(false);
+    setMostrarHistorialRecurso(false);
     setEditandoRecurso({
       nombre: origen.nombre || "",
       descripcion: origen.descripcion || "",
@@ -569,6 +579,34 @@ export default function BuscarRecursosPage() {
       foto_url: origen.foto_url || "",
       especificaciones: convertirEspecificacionesALista(origen.especificaciones),
     });
+  };
+
+  const abrirHistorialRecurso = async () => {
+    if (!recursoSeleccionado || !esGestion) return;
+    setMostrarModalCrear(false);
+    setEditandoRecurso(null);
+    setMostrarHistorialRecurso(true);
+    setCargandoHistorial(true);
+    setErrorHistorial(null);
+    try {
+      const [prestamos, usuarios] = await Promise.all([
+        consultarHistorialRecurso(recursoSeleccionado.id),
+        listarUsuarios().catch(() => []),
+      ]);
+      const mapaUsuarios = {};
+      if (Array.isArray(usuarios)) {
+        usuarios.forEach((u) => {
+          mapaUsuarios[u.id] = u;
+        });
+      }
+      setUsuariosPorId(mapaUsuarios);
+      setHistorialRecurso(Array.isArray(prestamos) ? prestamos : []);
+    } catch (err) {
+      setErrorHistorial(err?.message || "No se pudo cargar el historial de préstamos del recurso.");
+      setHistorialRecurso([]);
+    } finally {
+      setCargandoHistorial(false);
+    }
   };
 
   const handleEditarRecurso = async (e) => {
@@ -679,6 +717,61 @@ export default function BuscarRecursosPage() {
           guardando={guardandoEdicion}
           textoGuardar="Guardar cambios"
         />
+      )}
+
+      {/* Historial de préstamos del recurso (solo Gestor/Administrador) */}
+      {mostrarHistorialRecurso && esGestion && recursoSeleccionado && (
+        <div className="tarjeta" style={{ marginBottom: "2rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
+            <h2 style={{ margin: 0 }}>
+              Historial de préstamos: {recursoSeleccionado.nombre}
+            </h2>
+            <button
+              type="button"
+              className="boton boton--secundario"
+              onClick={() => setMostrarHistorialRecurso(false)}
+            >
+              Cerrar
+            </button>
+          </div>
+          {cargandoHistorial ? (
+            <p className="cargando" role="status">Cargando historial de préstamos...</p>
+          ) : errorHistorial ? (
+            <div className="alerta alerta--error" role="alert">{errorHistorial}</div>
+          ) : historialRecurso.length === 0 ? (
+            <p className="estado-vacio">Este recurso aún no registra préstamos.</p>
+          ) : (
+            <div className="tabla-contenedor">
+              <table className="tabla">
+                <thead>
+                  <tr>
+                    <th>Usuario</th>
+                    <th>Estado</th>
+                    <th>Inicio</th>
+                    <th>Fin</th>
+                    <th>Entrega real</th>
+                    <th>Devolución real</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historialRecurso.map((p) => {
+                    const u = usuariosPorId[p.usuario_id];
+                    return (
+                      <tr key={p.id}>
+                        <td>{u ? `${u.nombre} (${u.correo})` : p.usuario_id}</td>
+                        <td>{p.estado}</td>
+                        <td>{new Date(p.fecha_inicio).toLocaleString()}</td>
+                        <td>{new Date(p.fecha_fin).toLocaleString()}</td>
+                        <td>{p.fecha_entrega_real ? new Date(p.fecha_entrega_real).toLocaleString() : "—"}</td>
+                        <td>{p.fecha_devolucion_real ? new Date(p.fecha_devolucion_real).toLocaleString() : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Buscador */}
@@ -878,6 +971,14 @@ export default function BuscarRecursosPage() {
                         onClick={abrirModalEdicion}
                       >
                         ✏️ Editar datos del recurso
+                      </button>
+                      <button
+                        type="button"
+                        className="boton boton--secundario boton--bloque"
+                        style={{ marginTop: "0.5rem" }}
+                        onClick={abrirHistorialRecurso}
+                      >
+                        📋 Ver historial de préstamos
                       </button>
                     </div>
                   )}

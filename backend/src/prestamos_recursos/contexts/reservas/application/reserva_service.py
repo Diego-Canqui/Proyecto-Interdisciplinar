@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from prestamos_recursos.config import settings
 from prestamos_recursos.contexts.identidad_reputacion.domain.enums.nivel_reputacion import (
     NivelReputacion,
 )
+from prestamos_recursos.contexts.identidad_reputacion.domain.enums.tipo_sancion import TipoSancion
 from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
 from prestamos_recursos.contexts.reservas.application.dto.reserva_dto import (
     CrearReservaDTO,
@@ -51,6 +53,61 @@ class ReservaService:
         self._reputacion_service = reputacion_service
         self._catalogo_service = catalogo_service
 
+    def _resolver_nombre_recurso(self, recurso_id: UUID) -> str | None:
+        """Resuelve de forma segura el nombre del recurso desde el catálogo."""
+        if self._catalogo_service is None or not hasattr(
+            self._catalogo_service, "obtener_por_id"
+        ):
+            return None
+        try:
+            recurso = self._catalogo_service.obtener_por_id(recurso_id)
+        except Exception:  # noqa: BLE001
+            return None
+        if recurso is None:
+            return None
+        nombre = getattr(recurso, "nombre", None)
+        if nombre is None:
+            return None
+        return str(nombre) or None
+
+    def _llamar_reputacion(
+        self, nombre_metodo: str, *args: Any, **kwargs: Any
+    ) -> Any:
+        """Invoca un método de reputación pasando solo los kwargs compatibles con su firma."""
+        if self._reputacion_service is None:
+            return None
+        fn = getattr(self._reputacion_service, nombre_metodo, None)
+        if fn is None or not callable(fn):
+            return None
+
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return fn(*args)
+
+        if any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        ):
+            return fn(*args, **kwargs)
+
+        pos_params = [
+            name
+            for name, param in sig.parameters.items()
+            if param.kind
+            in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+        ocupados = set(pos_params[: len(args)])
+        kwargs_compatibles = {
+            clave: valor
+            for clave, valor in kwargs.items()
+            if clave not in ocupados
+            and clave in sig.parameters
+            and sig.parameters[clave].kind
+            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        return fn(*args, **kwargs_compatibles)
+
     def _obtener_puntaje_usuario(self, usuario_id: UUID) -> int:
         if self._reputacion_service is None:
             return 500
@@ -67,12 +124,51 @@ class ReservaService:
 
     def contar_reservas_activas_usuario(self, id_usuario: UUID) -> int:
         reservas = self._reserva_repository.obtener_por_usuario(id_usuario)
+        self._sincronizar_lista(reservas)
         return sum(
             1
             for r in reservas
             if r.estado in {EstadoReserva.PENDIENTE, EstadoReserva.CONFIRMADA}
             and r.esta_vigente()
         )
+
+    def _sincronizar_reserva(self, reserva: Reserva, ahora: datetime | None = None) -> bool:
+        """Sincroniza el estado de una reserva vencida o expirada por inasistencia."""
+        instante = Reserva._a_utc(ahora) if ahora is not None else datetime.now(UTC)
+
+        if reserva.estado == EstadoReserva.PENDIENTE and instante > Reserva._a_utc(
+            reserva.fecha_fin
+        ):
+            reserva.vencer()
+            self._reserva_repository.guardar(reserva)
+            return True
+
+        if reserva.estado == EstadoReserva.CONFIRMADA and instante > reserva.limite_recogida():
+            reserva.vencer()
+            self._reserva_repository.guardar(reserva)
+            if self._reputacion_service is not None and hasattr(
+                self._reputacion_service, "aplicar_sancion"
+            ):
+                recurso_nombre = self._resolver_nombre_recurso(reserva.recurso_id)
+                self._llamar_reputacion(
+                    "aplicar_sancion",
+                    reserva.usuario_id,
+                    TipoSancion.INASISTENCIA_RESERVA,
+                    motivo="Inasistencia a recogida de reserva",
+                    reserva_id=reserva.id,
+                    recurso_id=reserva.recurso_id,
+                    recurso_nombre=recurso_nombre,
+                )
+            return True
+
+        return False
+
+    def _sincronizar_lista(
+        self, reservas: list[Reserva], ahora: datetime | None = None
+    ) -> None:
+        """Sincroniza el estado de una lista de reservas."""
+        for reserva in reservas:
+            self._sincronizar_reserva(reserva, ahora)
 
     def _es_usuario_elegible(self, usuario_id: UUID) -> bool:
         if self._reputacion_service is None:
@@ -200,6 +296,12 @@ class ReservaService:
         reservas_activas = self._reserva_repository.obtener_activas_por_recurso(
             reserva.recurso_id
         )
+        self._sincronizar_lista(reservas_activas, instante_actual)
+        reservas_activas = [
+            otra
+            for otra in reservas_activas
+            if otra.estado in {EstadoReserva.PENDIENTE, EstadoReserva.CONFIRMADA}
+        ]
         if any(
             otra.usuario_id == reserva.usuario_id and reserva.se_superpone_con(otra)
             for otra in reservas_activas
@@ -224,10 +326,12 @@ class ReservaService:
 
     def obtener_por_usuario(self, id_usuario: UUID) -> list[ReservaDTO]:
         reservas = self._reserva_repository.obtener_por_usuario(id_usuario)
+        self._sincronizar_lista(reservas)
         return [ReservaDTO.model_validate(reserva) for reserva in reservas]
 
     def obtener_todas(self) -> list[ReservaDTO]:
         reservas = self._reserva_repository.obtener_todas()
+        self._sincronizar_lista(reservas)
         return [ReservaDTO.model_validate(reserva) for reserva in reservas]
 
     def confirmar_reserva(self, id_reserva: UUID) -> ReservaDTO:
@@ -236,6 +340,7 @@ class ReservaService:
         reservas_activas = self._reserva_repository.obtener_activas_por_recurso(
             reserva.recurso_id
         )
+        self._sincronizar_lista(reservas_activas)
         if any(
             otra.id != reserva.id
             and otra.estado == EstadoReserva.CONFIRMADA
@@ -259,6 +364,7 @@ class ReservaService:
 
         if estaba_confirmada:
             cola = self._reserva_repository.obtener_cola_por_recurso(reserva.recurso_id)
+            self._sincronizar_lista(cola)
             candidatas = [
                 c
                 for c in cola
@@ -288,17 +394,22 @@ class ReservaService:
 
     def convertir_a_prestamo(self, id_reserva: UUID, ahora: datetime | None = None) -> bool:
         reserva = self._reserva_repository.obtener_por_id(id_reserva)
-        if reserva is None or reserva.estado != EstadoReserva.CONFIRMADA:
+        if reserva is None:
+            return False
+
+        instante_actual = Reserva._a_utc(ahora) if ahora is not None else datetime.now(UTC)
+        if self._sincronizar_reserva(reserva, instante_actual):
+            raise ValueError("la reserva expiró por superar el tiempo límite de recogida")
+        if reserva.estado != EstadoReserva.CONFIRMADA:
             return False
 
         self._verificar_elegibilidad_usuario(reserva.usuario_id)
 
-        instante_actual = Reserva._a_utc(ahora) if ahora is not None else datetime.now(UTC)
         inicio_utc = Reserva._a_utc(reserva.fecha_inicio)
-        fin_utc = Reserva._a_utc(reserva.fecha_fin)
-        if not (inicio_utc - VENTANA_ANTICIPACION_PRESTAMO <= instante_actual <= fin_utc):
+        limite_utc = reserva.limite_recogida()
+        if not (inicio_utc - VENTANA_ANTICIPACION_PRESTAMO <= instante_actual <= limite_utc):
             raise ValueError(
-                "el préstamo solo puede iniciarse desde 1 hora antes del horario reservado y hasta antes de su vencimiento"
+                "el préstamo solo puede iniciarse desde 1 hora antes del horario reservado y hasta el límite de recogida"
             )
 
         creado = self._prestamo_service.solicitar_prestamo(
@@ -318,6 +429,7 @@ class ReservaService:
 
     def obtener_cola_espera(self, id_recurso: UUID) -> list[ReservaDTO]:
         reservas = self._reserva_repository.obtener_cola_por_recurso(id_recurso)
+        self._sincronizar_lista(reservas)
         vigentes = [reserva for reserva in reservas if reserva.esta_vigente()]
         puntajes = {
             reserva.usuario_id: self._obtener_puntaje_usuario(reserva.usuario_id)
@@ -330,4 +442,5 @@ class ReservaService:
         reserva = self._reserva_repository.obtener_por_id(id_reserva)
         if reserva is None:
             raise LookupError("reserva no encontrada")
+        self._sincronizar_reserva(reserva)
         return reserva

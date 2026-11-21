@@ -168,7 +168,7 @@ class UsuarioService:
             for p in prestamos:
                 est = getattr(p, "estado", None)
                 val = est.value if hasattr(est, "value") else str(est)
-                if val in ("ACTIVO", "ENTREGADO", "VENCIDO"):
+                if val in ("POR_ENTREGAR", "ENTREGADO", "VENCIDO"):
                     en_curso += 1
             return en_curso
         return 0
