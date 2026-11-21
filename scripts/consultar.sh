@@ -3,6 +3,7 @@
 #
 # Uso:
 #   ./scripts/consultar.sh 'SELECT * FROM identidad_reputacion.usuario;'   (modo consulta)
+#   ./scripts/consultar.sh -x 'SELECT * FROM identidad_reputacion.usuario;' (modo vertical)
 #   ./scripts/consultar.sh                                                (modo interactivo)
 #
 # No lee ni imprime secretos: solo usa POSTGRES_USER y POSTGRES_DB del .env.
@@ -36,11 +37,22 @@ leer_env() {
 mostrar_ayuda() {
   cat <<'FIN'
 Uso:
-  ./scripts/consultar.sh 'CONSULTA'   Ejecuta una consulta SQL y termina.
-  ./scripts/consultar.sh              Abre psql interactivo (search_path ya configurado).
+  ./scripts/consultar.sh [OPCIONES] 'CONSULTA'   Ejecuta una consulta SQL y termina.
+  ./scripts/consultar.sh [OPCIONES]              Abre psql interactivo (search_path ya configurado).
+
+Opciones de visualización:
+  -x, --vertical   Muestra cada fila en formato vertical (una ficha por registro).
+  --auto           Cambia a formato vertical automáticamente si la tabla no cabe.
+  --no-pager       Imprime directo sin paginador (útil para copiar o encadenar).
+  -h, --help       Muestra esta ayuda.
+
+Por defecto, las consultas en terminal usan scroll horizontal con 'less -S'
+(flechas ←/→ y ↑/↓ para moverte, 'q' para salir) sin cortar ni superponer filas.
 
 Ejemplos:
   ./scripts/consultar.sh 'SELECT * FROM identidad_reputacion.usuario;'
+  ./scripts/consultar.sh -x 'SELECT * FROM identidad_reputacion.usuario LIMIT 5;'
+  ./scripts/consultar.sh --auto 'SELECT * FROM prestamos.prestamos;'
   ./scripts/consultar.sh '\dt identidad_reputacion.*'
 
 Nota: las tablas las crea el backend al arrancar (./dev.sh); la BD sola no las tiene.
@@ -96,10 +108,40 @@ FIN
 
 # --- Programa principal -----------------------------------------------------
 
-if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  mostrar_ayuda
-  exit 0
-fi
+MODO_EXPANDIDO=""
+USAR_PAGER=1
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      mostrar_ayuda
+      exit 0
+      ;;
+    -x|--vertical)
+      MODO_EXPANDIDO="on"
+      shift
+      ;;
+    --auto)
+      MODO_EXPANDIDO="auto"
+      shift
+      ;;
+    --no-pager)
+      USAR_PAGER=0
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "ERROR: opción desconocida '$1'. Usa '--help' para ver las opciones." >&2
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 USUARIO="$(leer_env POSTGRES_USER "$USUARIO_DEFECTO")"
 BASE="$(leer_env POSTGRES_DB "$BASE_DEFECTO")"
@@ -111,10 +153,36 @@ if ! hay_tablas "$USUARIO" "$BASE"; then
   avisar_faltan_tablas
 fi
 
+OPCIONES_PSQL=(-P "linestyle=unicode" -P "null=(null)")
+if [ -n "$MODO_EXPANDIDO" ]; then
+  OPCIONES_PSQL+=(-P "expanded=${MODO_EXPANDIDO}")
+fi
+
 if [ "$#" -gt 0 ]; then
   # Modo consulta: los argumentos se unen y se pasan con -c. Sin -it (no hay TTY).
   consulta="$*"
-  docker compose exec -T "$SERVICIO" psql -X -q -U "$USUARIO" -d "$BASE" -P pager=off -c "$consulta"
+  COLUMNAS="$(tput cols 2>/dev/null || echo 120)"
+
+  if [ "$USAR_PAGER" -eq 1 ] && [ -t 1 ] && command -v less >/dev/null 2>&1; then
+    set +e
+    docker compose exec -T \
+      -e "COLUMNS=${COLUMNAS}" \
+      "$SERVICIO" psql -X -q -U "$USUARIO" -d "$BASE" \
+      "${OPCIONES_PSQL[@]}" -P pager=off -c "$consulta" \
+      | less -SRXF
+    estado_psql="${PIPESTATUS[0]}"
+    set -e
+    # 141 = SIGPIPE (el usuario cerró less con 'q' antes del final).
+    if [ "$estado_psql" -eq 141 ]; then
+      exit 0
+    fi
+    exit "$estado_psql"
+  fi
+
+  docker compose exec -T \
+    -e "COLUMNS=${COLUMNAS}" \
+    "$SERVICIO" psql -X -q -U "$USUARIO" -d "$BASE" \
+    "${OPCIONES_PSQL[@]}" -P pager=off -c "$consulta"
   exit $?
 fi
 
@@ -126,13 +194,28 @@ if [ ! -t 0 ]; then
   exit 1
 fi
 
+# En modo interactivo activamos expanded=auto por defecto si no se pidió otro modo.
+if [ -z "$MODO_EXPANDIDO" ]; then
+  OPCIONES_PSQL+=(-P "expanded=auto")
+fi
+
+ENV_INTERACTIVO=(
+  -e "PGOPTIONS=-c search_path=identidad_reputacion,catalogo,reservas,prestamos,public"
+)
+if [ "$USAR_PAGER" -eq 0 ]; then
+  OPCIONES_PSQL+=(-P "pager=off")
+elif docker compose exec -T "$SERVICIO" sh -c 'command -v less >/dev/null 2>&1'; then
+  ENV_INTERACTIVO+=(-e "PSQL_PAGER=less -SRXF")
+fi
+
 cat >&2 <<'FIN'
 psql interactivo. Ayuda rápida:
-  \dn                     lista los schemas
+  \dn                          lista los schemas
   \dt identidad_reputacion.*   lista las tablas de un schema
-  \q                      para salir
+  \x auto / \x on / \x off     alterna vista vertical automática/fija/tabla
+  \q                           para salir
 FIN
 
 docker compose exec \
-  -e "PGOPTIONS=-c search_path=identidad_reputacion,catalogo,reservas,prestamos,public" \
-  -it "$SERVICIO" psql -U "$USUARIO" -d "$BASE"
+  "${ENV_INTERACTIVO[@]}" \
+  -it "$SERVICIO" psql -U "$USUARIO" -d "$BASE" "${OPCIONES_PSQL[@]}"
