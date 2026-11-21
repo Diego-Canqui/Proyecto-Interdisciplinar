@@ -3,6 +3,9 @@
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.excepcion_academica import (
     ExcepcionAcademica,
 )
+from prestamos_recursos.contexts.identidad_reputacion.domain.entities.movimiento_reputacion import (
+    MovimientoReputacion,
+)
 from prestamos_recursos.contexts.identidad_reputacion.domain.entities.perfil_reputacion import (
     PerfilReputacion,
 )
@@ -11,6 +14,7 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.entities.usuario im
 
 __all__ = [
     "ExcepcionAcademica",
+    "MovimientoReputacion",
     "PerfilReputacion",
     "Sancion",
     "Usuario",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -43,6 +44,13 @@ from prestamos_recursos.contexts.prestamos.domain.value_objects.compromiso_respo
 )
 
 
+def _ensure_utc(dt: datetime) -> datetime:
+    """Asegura que un datetime tenga zona horaria UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 class PrestamoService:
     """«Service» PrestamoService."""
 
@@ -60,6 +68,61 @@ class PrestamoService:
         self._garantia_repository = garantia_repository
         self._reputacion_service = reputacion_service
         self._recurso_repository = catalogo_service or recurso_repository
+
+    def _resolver_nombre_recurso(self, recurso_id: UUID) -> str | None:
+        """Resuelve de forma segura el nombre del recurso desde el catálogo."""
+        if self._recurso_repository is None or not hasattr(
+            self._recurso_repository, "obtener_por_id"
+        ):
+            return None
+        try:
+            recurso = self._recurso_repository.obtener_por_id(recurso_id)
+        except Exception:  # noqa: BLE001
+            return None
+        if recurso is None:
+            return None
+        nombre = getattr(recurso, "nombre", None)
+        if nombre is None:
+            return None
+        return str(nombre) or None
+
+    def _llamar_reputacion(
+        self, nombre_metodo: str, *args: Any, **kwargs: Any
+    ) -> Any:
+        """Invoca un método de reputación pasando solo los kwargs compatibles con su firma."""
+        if self._reputacion_service is None:
+            return None
+        fn = getattr(self._reputacion_service, nombre_metodo, None)
+        if fn is None or not callable(fn):
+            return None
+
+        try:
+            sig = inspect.signature(fn)
+        except (TypeError, ValueError):
+            return fn(*args)
+
+        if any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        ):
+            return fn(*args, **kwargs)
+
+        pos_params = [
+            name
+            for name, param in sig.parameters.items()
+            if param.kind
+            in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+        ocupados = set(pos_params[: len(args)])
+        kwargs_compatibles = {
+            clave: valor
+            for clave, valor in kwargs.items()
+            if clave not in ocupados
+            and clave in sig.parameters
+            and sig.parameters[clave].kind
+            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        return fn(*args, **kwargs_compatibles)
 
     def solicitar_prestamo(
         self,
@@ -85,7 +148,7 @@ class PrestamoService:
             recurso_id=id_recurso,
             fecha_inicio=fecha_inicio,
             fecha_fin=fecha_fin,
-            estado=EstadoPrestamo.ACTIVO,
+            estado=EstadoPrestamo.POR_ENTREGAR,
         )
         self._prestamo_repository.guardar(prestamo)
         self._recurso_repository.actualizar_estado(id_recurso, EstadoRecurso.EN_USO)
@@ -116,16 +179,12 @@ class PrestamoService:
     ) -> None:
         """Inicia el ciclo de entrega creando garantía y checklist.
 
-        - El préstamo debe existir y estar en estado ``ACTIVO``.
+        - El préstamo debe existir y estar en estado ``POR_ENTREGAR``.
         - Se crea una ``Garantia`` con estado ``PENDIENTE``.
         - Se crea un ``Checklist`` de tipo ``ESTADO_INICIAL``.
         - Ambos objetos se persisten mediante sus repositorios.
         """
-        prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
-        if prestamo is None:
-            raise ValueError("Préstamo no encontrado")
-        if prestamo.estado != EstadoPrestamo.ACTIVO:
-            raise ValueError("Sólo pueden entregarse préstamos activos")
+        self._obtener_prestamo_por_entregar(id_prestamo)
 
         # ---------- Garantía ----------
         garantia = Garantia(
@@ -150,7 +209,7 @@ class PrestamoService:
     def agregar_item_checklist(
         self, id_prestamo: UUID, observaciones: str, fotos_urls: list[str]
     ) -> None:
-        prestamo = self._obtener_prestamo_activo(id_prestamo)
+        prestamo = self._obtener_prestamo_por_entregar(id_prestamo)
         checklist = self._checklist_repository.obtener_por_prestamo_y_tipo(
             prestamo.id, TipoChecklist.ESTADO_INICIAL
         )
@@ -160,7 +219,7 @@ class PrestamoService:
         self._checklist_repository.guardar(checklist)
 
     def confirmar_entrega(self, id_prestamo: UUID) -> None:
-        prestamo = self._obtener_prestamo_activo(id_prestamo)
+        prestamo = self._obtener_prestamo_por_entregar(id_prestamo)
         checklist = self._checklist_repository.obtener_por_prestamo_y_tipo(
             prestamo.id, TipoChecklist.ESTADO_INICIAL
         )
@@ -175,7 +234,7 @@ class PrestamoService:
         self._garantia_repository.guardar(garantia)
 
     def finalizar_entrega(self, id_prestamo: UUID) -> None:
-        prestamo = self._obtener_prestamo_activo(id_prestamo)
+        prestamo = self._obtener_prestamo_por_entregar(id_prestamo)
         checklist = self._checklist_repository.obtener_por_prestamo_y_tipo(
             prestamo.id, TipoChecklist.ESTADO_INICIAL
         )
@@ -196,7 +255,15 @@ class PrestamoService:
             and self._reputacion_service is not None
             and hasattr(self._reputacion_service, "premiar_entrega_puntual")
         ):
-            self._reputacion_service.premiar_entrega_puntual(prestamo.usuario_id)
+            nombre_recurso = self._resolver_nombre_recurso(prestamo.recurso_id)
+            self._llamar_reputacion(
+                "premiar_entrega_puntual",
+                prestamo.usuario_id,
+                prestamo_id=prestamo.id,
+                reserva_id=prestamo.reserva_id,
+                recurso_id=prestamo.recurso_id,
+                recurso_nombre=nombre_recurso,
+            )
 
     def completar_entrega(
         self,
@@ -217,6 +284,7 @@ class PrestamoService:
         prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
         if prestamo is None:
             raise ValueError("Préstamo no encontrado")
+        self._sincronizar_prestamo(prestamo)
 
         inicial = (
             self._checklist_repository.obtener_por_prestamo_y_tipo(
@@ -273,12 +341,58 @@ class PrestamoService:
             ),
         }
 
-    def _obtener_prestamo_activo(self, id_prestamo: UUID) -> Prestamo:
+    def _sincronizar_prestamo(self, prestamo: Prestamo, ahora: datetime | None = None) -> bool:
+        """Sincroniza el estado de un préstamo vencido o expirado por inasistencia."""
+        instante = _ensure_utc(ahora) if ahora is not None else datetime.now(UTC)
+
+        if prestamo.estado == EstadoPrestamo.POR_ENTREGAR and instante > prestamo.limite_recogida():
+            prestamo.cancelar("Expirado por inasistencia")
+            self._prestamo_repository.guardar(prestamo)
+            if self._recurso_repository is not None and hasattr(
+                self._recurso_repository, "obtener_por_id"
+            ):
+                recurso = self._recurso_repository.obtener_por_id(prestamo.recurso_id)
+                if recurso is not None and recurso.estado == EstadoRecurso.EN_USO:
+                    self._recurso_repository.actualizar_estado(
+                        prestamo.recurso_id, EstadoRecurso.DISPONIBLE
+                    )
+            if self._reputacion_service is not None and hasattr(
+                self._reputacion_service, "aplicar_sancion"
+            ):
+                nombre_recurso = self._resolver_nombre_recurso(prestamo.recurso_id)
+                self._llamar_reputacion(
+                    "aplicar_sancion",
+                    prestamo.usuario_id,
+                    TipoSancion.INASISTENCIA_RESERVA,
+                    motivo="Inasistencia a recogida de préstamo",
+                    prestamo_id=prestamo.id,
+                    reserva_id=prestamo.reserva_id,
+                    recurso_id=prestamo.recurso_id,
+                    recurso_nombre=nombre_recurso,
+                )
+            return True
+
+        if prestamo.estado == EstadoPrestamo.ENTREGADO and instante > _ensure_utc(prestamo.fecha_fin):
+            prestamo.vencer(instante)
+            self._prestamo_repository.guardar(prestamo)
+            return True
+
+        return False
+
+    def _sincronizar_lista(
+        self, prestamos: list[Prestamo], ahora: datetime | None = None
+    ) -> None:
+        """Sincroniza el estado de una lista de préstamos."""
+        for prestamo in prestamos:
+            self._sincronizar_prestamo(prestamo, ahora)
+
+    def _obtener_prestamo_por_entregar(self, id_prestamo: UUID) -> Prestamo:
         prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
         if prestamo is None:
             raise ValueError("Préstamo no encontrado")
-        if prestamo.estado != EstadoPrestamo.ACTIVO:
-            raise ValueError("El préstamo no está activo")
+        self._sincronizar_prestamo(prestamo)
+        if prestamo.estado != EstadoPrestamo.POR_ENTREGAR:
+            raise ValueError("Sólo pueden entregarse préstamos pendientes de entrega (POR_ENTREGAR)")
         return prestamo
 
     def obtener_plantilla_checklist(self, id_prestamo: UUID) -> dict[str, Any]:
@@ -400,6 +514,9 @@ class PrestamoService:
             observaciones_retorno=observaciones_retorno,
             dias_retraso=dias_retraso,
             puntual=puntual,
+            prestamo_id=prestamo.id,
+            reserva_id=prestamo.reserva_id,
+            recurso_id=prestamo.recurso_id,
         )
 
         return {
@@ -416,31 +533,52 @@ class PrestamoService:
         observaciones_retorno: str,
         dias_retraso: int,
         puntual: bool,
+        prestamo_id: UUID | None = None,
+        reserva_id: UUID | None = None,
+        recurso_id: UUID | None = None,
     ) -> None:
         if self._reputacion_service is None:
             return
+        if tipo_efectivo == TipoDanoDevolucion.NINGUNO and dias_retraso <= 0 and not puntual:
+            return
+
+        nombre_recurso = (
+            self._resolver_nombre_recurso(recurso_id) if recurso_id is not None else None
+        )
+        referencias = {
+            "prestamo_id": prestamo_id,
+            "reserva_id": reserva_id,
+            "recurso_id": recurso_id,
+            "recurso_nombre": nombre_recurso,
+        }
 
         if hasattr(self._reputacion_service, "aplicar_sancion"):
             if tipo_efectivo == TipoDanoDevolucion.DANO_PARCIAL:
-                self._reputacion_service.aplicar_sancion(
+                self._llamar_reputacion(
+                    "aplicar_sancion",
                     usuario_id,
                     TipoSancion.DANO_PARCIAL,
                     motivo=f"Daños físicos en recepción: {observaciones_retorno}",
+                    **referencias,
                 )
             elif tipo_efectivo == TipoDanoDevolucion.DANO_TOTAL:
-                self._reputacion_service.aplicar_sancion(
+                self._llamar_reputacion(
+                    "aplicar_sancion",
                     usuario_id,
                     TipoSancion.DANO_TOTAL,
                     motivo=f"Daño total en recepción: {observaciones_retorno}",
                     monto_opcional=monto_dano,
+                    **referencias,
                 )
 
             if dias_retraso > 0:
-                self._reputacion_service.aplicar_sancion(
+                self._llamar_reputacion(
+                    "aplicar_sancion",
                     usuario_id,
                     TipoSancion.TARDANZA,
                     motivo="Devolución tardía",
                     dias_retardo=dias_retraso,
+                    **referencias,
                 )
 
         if (
@@ -448,11 +586,11 @@ class PrestamoService:
             and tipo_efectivo == TipoDanoDevolucion.NINGUNO
             and hasattr(self._reputacion_service, "premiar_devolucion_puntual")
         ):
-            self._reputacion_service.premiar_devolucion_puntual(usuario_id)
-
-    def renovar_prestamo(self, id_prestamo: UUID) -> bool:
-        """Las renovaciones de préstamos están deshabilitadas por política operativa."""
-        raise ValueError("Renovación de préstamos no permitida")
+            self._llamar_reputacion(
+                "premiar_devolucion_puntual",
+                usuario_id,
+                **referencias,
+            )
 
     def validar_reglas_negocio(self) -> bool:
         """Placeholder para validar reglas de negocio del préstamo."""
@@ -463,14 +601,28 @@ class PrestamoService:
         prestamo = self._prestamo_repository.obtener_por_id(id_prestamo)
         if prestamo is None:
             return None
+        self._sincronizar_prestamo(prestamo)
         return PrestamoDTO.from_entity(prestamo)
 
     def consultar_historial(self, id_usuario: UUID) -> list[PrestamoDTO]:
         prestamos = self._prestamo_repository.obtener_por_usuario(id_usuario)
+        self._sincronizar_lista(prestamos)
+        return [PrestamoDTO.from_entity(p) for p in prestamos]
+
+    def consultar_historial_por_recurso(self, id_recurso: UUID) -> list[PrestamoDTO]:
+        """Consulta el historial cronológico de préstamos de un recurso."""
+        if hasattr(self._prestamo_repository, "obtener_por_recurso"):
+            prestamos = self._prestamo_repository.obtener_por_recurso(id_recurso)
+        else:
+            prestamos = [
+                p for p in self._prestamo_repository.obtener_todos() if p.recurso_id == id_recurso
+            ]
+        self._sincronizar_lista(prestamos)
         return [PrestamoDTO.from_entity(p) for p in prestamos]
 
     def consultar_todos(self) -> list[PrestamoDTO]:
         prestamos = self._prestamo_repository.obtener_todos()
+        self._sincronizar_lista(prestamos)
         return [PrestamoDTO.from_entity(p) for p in prestamos]
 
     def cancelar_prestamo(self, id_prestamo: UUID, motivo: str = "") -> PrestamoDTO:
@@ -479,6 +631,7 @@ class PrestamoService:
         if prestamo is None:
             raise ValueError("Préstamo no encontrado")
 
+        self._sincronizar_prestamo(prestamo)
         prestamo.cancelar(motivo)
         self._prestamo_repository.guardar(prestamo)
 
@@ -490,10 +643,11 @@ class PrestamoService:
         return PrestamoDTO.from_entity(prestamo)
 
     def contar_prestamos_en_curso(self, id_usuario: UUID) -> int:
-        """Cuenta los préstamos en curso del usuario (ACTIVO, ENTREGADO o VENCIDO)."""
+        """Cuenta los préstamos en curso del usuario (POR_ENTREGAR, ENTREGADO o VENCIDO)."""
         prestamos = self._prestamo_repository.obtener_por_usuario(id_usuario)
+        self._sincronizar_lista(prestamos)
         estados_en_curso = {
-            EstadoPrestamo.ACTIVO,
+            EstadoPrestamo.POR_ENTREGAR,
             EstadoPrestamo.ENTREGADO,
             EstadoPrestamo.VENCIDO,
         }

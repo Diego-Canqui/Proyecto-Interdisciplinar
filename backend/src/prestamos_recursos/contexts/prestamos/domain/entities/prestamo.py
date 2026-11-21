@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
@@ -35,19 +35,25 @@ class Prestamo(BaseEntity):
             raise ValueError("fecha_fin debe ser posterior a fecha_inicio")
 
     def iniciar(self) -> None:
-        """Inicia el préstamo marcándolo como ACTIVO si es válido."""
+        """Inicia el préstamo marcándolo como POR_ENTREGAR si es válido."""
         if self.estado in (EstadoPrestamo.DEVUELTO, EstadoPrestamo.CANCELADO):
             raise ValueError(f"No se puede iniciar un préstamo en estado {self.estado.value}")
-        self.estado = EstadoPrestamo.ACTIVO
+        self.estado = EstadoPrestamo.POR_ENTREGAR
 
     def marcar_entregado(self, fecha_entrega: datetime | None = None) -> None:
         """Marca el préstamo como entregado al usuario tras confirmar la inspección."""
-        if self.estado != EstadoPrestamo.ACTIVO:
-            raise ValueError("Sólo pueden marcarse como entregados préstamos activos")
+        if self.estado != EstadoPrestamo.POR_ENTREGAR:
+            raise ValueError(
+                "Sólo pueden marcarse como entregados préstamos pendientes de entrega (POR_ENTREGAR)"
+            )
         self.estado = EstadoPrestamo.ENTREGADO
         self.fecha_entrega_real = (
             _ensure_utc(fecha_entrega) if fecha_entrega is not None else datetime.now(UTC)
         )
+
+    def limite_recogida(self) -> datetime:
+        """Retorna el límite máximo para recoger físicamente el recurso en ventanilla."""
+        return min(_ensure_utc(self.fecha_inicio) + timedelta(minutes=30), _ensure_utc(self.fecha_fin))
 
     def calcular_dias_retraso(self, fecha_referencia: datetime | None = None) -> int:
         """Calcula cuántos días de retraso hay respecto a fecha_fin."""
@@ -75,9 +81,9 @@ class Prestamo(BaseEntity):
             raise ValueError("El préstamo ya fue devuelto")
         if self.estado == EstadoPrestamo.CANCELADO:
             raise ValueError("No se puede devolver un préstamo cancelado")
-        if self.estado == EstadoPrestamo.ACTIVO:
+        if self.estado == EstadoPrestamo.POR_ENTREGAR:
             raise ValueError(
-                "No se puede devolver un préstamo pendiente de entrega física (ACTIVO)"
+                "No se puede devolver un préstamo pendiente de entrega física (POR_ENTREGAR)"
             )
 
         fecha = _ensure_utc(fecha_devolucion) if fecha_devolucion is not None else datetime.now(UTC)
@@ -87,8 +93,8 @@ class Prestamo(BaseEntity):
         return dias_retraso
 
     def vencer(self, fecha_actual: datetime | None = None) -> None:
-        """Marca el préstamo como VENCIDO si la fecha actual ha superado fecha_fin."""
-        if self.estado in (EstadoPrestamo.DEVUELTO, EstadoPrestamo.CANCELADO):
+        """Marca el préstamo como VENCIDO solo si está ENTREGADO y superó fecha_fin."""
+        if self.estado != EstadoPrestamo.ENTREGADO:
             raise ValueError(
                 f"No se puede marcar como vencido un préstamo en estado {self.estado.value}"
             )
@@ -100,28 +106,12 @@ class Prestamo(BaseEntity):
 
         self.estado = EstadoPrestamo.VENCIDO
 
-    def solicitar_prorroga(self, dias: int = 7, fecha_actual: datetime | None = None) -> bool:
-        """
-        Determina si el préstamo es apto para solicitar una prórroga.
-        Debe estar ENTREGADO y dentro de la fecha límite.
-        """
-        if dias <= 0:
-            return False
-        if self.estado != EstadoPrestamo.ENTREGADO:
-            return False
-
-        fecha = _ensure_utc(fecha_actual) if fecha_actual is not None else datetime.now(UTC)
-        fin = _ensure_utc(self.fecha_fin)
-        return fecha <= fin
-
-    def renovar(self, dias: int = 7, fecha_actual: datetime | None = None) -> None:
-        """Las renovaciones de préstamos están deshabilitadas por política operativa."""
-        raise ValueError("Renovación de préstamos no permitida")
-
     def cancelar(self, motivo: str = "") -> None:
-        """Cancela administrativamente el préstamo si está pendiente de entrega física (ACTIVO)."""
+        """Cancela administrativamente el préstamo si está pendiente de entrega física (POR_ENTREGAR)."""
         if self.estado == EstadoPrestamo.DEVUELTO:
             raise ValueError("No se puede cancelar un préstamo que ya ha sido devuelto")
-        if self.estado != EstadoPrestamo.ACTIVO:
-            raise ValueError("Solo se pueden cancelar préstamos pendientes de entrega física (ACTIVO)")
+        if self.estado != EstadoPrestamo.POR_ENTREGAR:
+            raise ValueError(
+                "Solo se pueden cancelar préstamos pendientes de entrega física (POR_ENTREGAR)"
+            )
         self.estado = EstadoPrestamo.CANCELADO

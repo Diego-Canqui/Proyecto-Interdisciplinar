@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -94,7 +95,7 @@ def test_conversion_persiste_prestamo_y_reserva_en_una_transaccion():
     assert prestamo.reserva_id == reserva_id
     assert prestamo.usuario_id == usuario_id
     assert prestamo.recurso_id == recurso_id
-    assert prestamo.estado == EstadoPrestamo.ACTIVO
+    assert prestamo.estado == EstadoPrestamo.POR_ENTREGAR
     assert session.query(PrestamoModel).count() == 1
     assert reserva is not None
     assert reserva.estado == EstadoReserva.CONVERTIDA
@@ -106,13 +107,14 @@ def test_conversion_persiste_prestamo_y_reserva_en_una_transaccion():
 def test_conversion_no_persiste_prestamo_si_reserva_no_esta_confirmada():
     session = make_session()
     reserva_id = uuid4()
+    inicio = datetime.now(UTC) + timedelta(hours=1)
     session.add(
         ReservaModel(
             id=reserva_id,
             usuario_id=uuid4(),
             recurso_id=uuid4(),
-            fecha_inicio=datetime(2026, 10, 6, tzinfo=UTC),
-            fecha_fin=datetime(2026, 10, 7, tzinfo=UTC),
+            fecha_inicio=inicio,
+            fecha_fin=inicio + timedelta(hours=2),
             estado=EstadoReserva.PENDIENTE,
         )
     )
@@ -123,6 +125,29 @@ def test_conversion_no_persiste_prestamo_si_reserva_no_esta_confirmada():
 
     assert session.query(PrestamoModel).count() == 0
     assert SqlReservaRepository(session).obtener_por_id(reserva_id).estado == EstadoReserva.PENDIENTE
+
+
+def test_conversion_expirada_persiste_vencida_y_rechaza_prestamo():
+    session = make_session()
+    reserva_id = uuid4()
+    ahora = datetime.now(UTC)
+    session.add(
+        ReservaModel(
+            id=reserva_id,
+            usuario_id=uuid4(),
+            recurso_id=uuid4(),
+            fecha_inicio=ahora - timedelta(minutes=35),
+            fecha_fin=ahora + timedelta(hours=2),
+            estado=EstadoReserva.CONFIRMADA,
+        )
+    )
+    session.commit()
+
+    with session.begin(), pytest.raises(ValueError, match="expiró"):
+        make_service(session).convertir_a_prestamo(reserva_id)
+
+    assert session.query(PrestamoModel).count() == 0
+    assert SqlReservaRepository(session).obtener_por_id(reserva_id).estado == EstadoReserva.VENCIDA
 
 
 def test_obtener_todas_ordena_por_fecha_inicio_e_id():

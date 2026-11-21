@@ -5,8 +5,11 @@ import { consultarHistorial, consultarInspeccion } from "../../prestamos/api.js"
 import {
   anularExcepcion,
   aplicarSancion,
+  descargarCsvMovimientosGlobal,
+  descargarCsvMovimientosUsuario,
   ejecutarAmnistia,
   listarUsuarios,
+  obtenerMovimientosUsuario,
   obtenerPerfilGestion,
   registrarExcepcion,
 } from "../api.js";
@@ -58,6 +61,14 @@ const ETIQUETA_ESTADO_PRESTAMO = {
   CANCELADO: "Cancelado",
 };
 
+const ETIQUETAS_TIPO_MOVIMIENTO = {
+  BONIFICACION_ENTREGA_PUNTUAL: "Entrega puntual",
+  BONIFICACION_DEVOLUCION_PUNTUAL: "Devolución puntual",
+  SANCION: "Sanción",
+  AMNISTIA_MENSUAL: "Amnistía mensual",
+  SALDO_INICIAL_HEREDADO: "Saldo previo",
+};
+
 /**
  * Formatea una fecha del backend en la zona local del navegador.
  * @param {string|null|undefined} valor - Fecha ISO 8601
@@ -100,6 +111,7 @@ export default function GestionReputacionPage() {
   const [errorFicha, setErrorFicha] = useState(null);
   // Último usuario pedido: descarta respuestas de selecciones anteriores (RF-04)
   const idPedidoFicha = useRef(null);
+  const idPedidoMovimientos = useRef(null);
   const fichaRef = useRef(null);
 
   // --- Estado de pestañas y del historial de préstamos del alumno (Spec 008, RF-07) ---
@@ -111,6 +123,63 @@ export default function GestionReputacionPage() {
   const [inspeccionVisualizada, setInspeccionVisualizada] = useState(null);
   const [cargandoInspeccion, setCargandoInspeccion] = useState(false);
   const [errorInspeccion, setErrorInspeccion] = useState(null);
+
+  // --- Estado de la bitácora de movimientos y descarga CSV (Spec 011, RF-06) ---
+  const [movimientosAlumno, setMovimientosAlumno] = useState([]);
+  const [cargandoMovimientos, setCargandoMovimientos] = useState(false);
+  const [errorMovimientos, setErrorMovimientos] = useState(null);
+  const [descargandoCsvGlobal, setDescargandoCsvGlobal] = useState(false);
+  const [errorCsvGlobal, setErrorCsvGlobal] = useState(null);
+  const [descargandoCsvAlumno, setDescargandoCsvAlumno] = useState(false);
+  const [errorCsvAlumno, setErrorCsvAlumno] = useState(null);
+
+  const descargarPrestamosCsv = () => {
+    if (!seleccionado) {
+      return;
+    }
+    const sanearCsv = (valor) => {
+      const texto = valor == null ? "" : String(valor);
+      const protegido = /^[=+\-@\t\r]/.test(texto.trimStart()) ? `'${texto}` : texto;
+      return `"${protegido.replaceAll('"', '""')}"`;
+    };
+    const encabezados = [
+      "Usuario",
+      "Correo",
+      "Recurso",
+      "Estado",
+      "Inicio pactado",
+      "Fin pactado",
+      "Recogida real",
+      "Devolución real",
+    ];
+    const filas = prestamosAlumno.map((prestamo) => {
+      const recurso = recursosPorId.get(prestamo.recurso_id);
+      return [
+        seleccionado.nombre,
+        seleccionado.correo,
+        recurso?.nombre || "Recurso del catálogo",
+        ETIQUETA_ESTADO_PRESTAMO[prestamo.estado] || prestamo.estado,
+        formatearFecha(prestamo.fecha_inicio),
+        formatearFecha(prestamo.fecha_fin),
+        prestamo.fecha_entrega_real ? formatearFecha(prestamo.fecha_entrega_real) : "Pendiente",
+        prestamo.fecha_devolucion_real
+          ? formatearFecha(prestamo.fecha_devolucion_real)
+          : "Pendiente",
+      ]
+        .map(sanearCsv)
+        .join(",");
+    });
+    const contenido = `\ufeff${[encabezados.map(sanearCsv).join(","), ...filas].join("\n")}`;
+    const blob = new Blob([contenido], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const enlace = document.createElement("a");
+    enlace.href = url;
+    enlace.download = `prestamos_${seleccionado.id}.csv`;
+    document.body.appendChild(enlace);
+    enlace.click();
+    enlace.remove();
+    URL.revokeObjectURL(url);
+  };
 
   // --- Estado del formulario de sanción (T7, RF-05, RF-09) ---
   // Tipo de sanción: los cuatro valores posibles del dominio
@@ -266,6 +335,55 @@ export default function GestionReputacionPage() {
     [navigate, recursosCatalogo]
   );
 
+  const procesarErrorBitacora = useCallback(
+    (err, setErrorEstado) => {
+      if (err.status === 401) {
+        localStorage.removeItem("token");
+        navigate("/login");
+        return;
+      }
+      if (err.status === 403) {
+        setErrorEstado({ texto: mensajeDeError(err, MENSAJES_CARGA), permisos: true });
+        return;
+      }
+      if (err.status === 404) {
+        setErrorEstado({ texto: mensajeDeError(err), noEncontrado: true });
+        return;
+      }
+      setErrorEstado({
+        texto: mensajeDeError(err),
+        reintentable: err.status === undefined || err.status >= 500,
+      });
+    },
+    [navigate]
+  );
+
+  const cargarMovimientosAlumno = useCallback(
+    async (usuarioId) => {
+      idPedidoMovimientos.current = usuarioId;
+      setCargandoMovimientos(true);
+      setErrorMovimientos(null);
+      try {
+        const datos = await obtenerMovimientosUsuario(usuarioId);
+        if (idPedidoMovimientos.current !== usuarioId) {
+          return;
+        }
+        setMovimientosAlumno(Array.isArray(datos) ? datos : []);
+      } catch (err) {
+        if (idPedidoMovimientos.current !== usuarioId) {
+          return;
+        }
+        setMovimientosAlumno([]);
+        procesarErrorBitacora(err, setErrorMovimientos);
+      } finally {
+        if (idPedidoMovimientos.current === usuarioId) {
+          setCargandoMovimientos(false);
+        }
+      }
+    },
+    [procesarErrorBitacora]
+  );
+
   // Cargar la ficha al seleccionar un usuario y al cambiar de selección (RF-03, RF-04)
   useEffect(() => {
     if (!seleccionado) {
@@ -282,6 +400,19 @@ export default function GestionReputacionPage() {
     cargarFicha(seleccionado.id);
     cargarHistorialAlumno(seleccionado.id);
   }, [seleccionado, cargarFicha, cargarHistorialAlumno]);
+
+  // Cargar bitácora de movimientos por separado para no romper la ficha si falla (Spec 011)
+  useEffect(() => {
+    if (!seleccionado) {
+      idPedidoMovimientos.current = null;
+      setMovimientosAlumno([]);
+      setErrorMovimientos(null);
+      setCargandoMovimientos(false);
+      setErrorCsvAlumno(null);
+      return;
+    }
+    cargarMovimientosAlumno(seleccionado.id);
+  }, [seleccionado, cargarMovimientosAlumno]);
 
   const recursosPorId = useMemo(
     () => new Map(recursosCatalogo.map((r) => [r.id, r])),
@@ -322,6 +453,8 @@ export default function GestionReputacionPage() {
     setSeleccionado(usuario);
     // Cambiar de selección limpia mensajes y vuelve a cargar la ficha (RF-03, RF-04)
     setErrorFicha(null);
+    setErrorMovimientos(null);
+    setErrorCsvAlumno(null);
     setExitoSancion(null);
     setErrorSancion(null);
     setExitoExcepcion(null);
@@ -331,6 +464,36 @@ export default function GestionReputacionPage() {
     setErrorAnulacion(null);
     if (window.innerWidth < 900) {
       fichaRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  const descargarCsvGlobal = async () => {
+    if (descargandoCsvGlobal) {
+      return;
+    }
+    setDescargandoCsvGlobal(true);
+    setErrorCsvGlobal(null);
+    try {
+      await descargarCsvMovimientosGlobal();
+    } catch (err) {
+      procesarErrorBitacora(err, setErrorCsvGlobal);
+    } finally {
+      setDescargandoCsvGlobal(false);
+    }
+  };
+
+  const descargarCsvAlumno = async (usuarioId) => {
+    if (descargandoCsvAlumno || !usuarioId) {
+      return;
+    }
+    setDescargandoCsvAlumno(true);
+    setErrorCsvAlumno(null);
+    try {
+      await descargarCsvMovimientosUsuario(usuarioId);
+    } catch (err) {
+      procesarErrorBitacora(err, setErrorCsvAlumno);
+    } finally {
+      setDescargandoCsvAlumno(false);
     }
   };
 
@@ -414,8 +577,11 @@ export default function GestionReputacionPage() {
       setMotivoSancion("");
       setDiasRetardo("");
       setMontoSancion("");
-      // Recargar la ficha para reflejar el nuevo puntaje (RF-05)
-      await cargarFicha(seleccionado.id);
+      // Recargar la ficha y la bitácora para reflejar el nuevo puntaje (RF-05, Spec 011)
+      await Promise.all([
+        cargarFicha(seleccionado.id),
+        cargarMovimientosAlumno(seleccionado.id),
+      ]);
     } catch (err) {
       const error = procesarErrorFormulario(err, "sancion");
       if (error !== null) {
@@ -610,9 +776,12 @@ export default function GestionReputacionPage() {
           texto: "Ningún perfil resultó elegible",
         });
       }
-      // Si hay un usuario seleccionado, recargar su ficha para reflejar posibles cambios (RF-08)
+      // Si hay un usuario seleccionado, recargar su ficha y bitácora para reflejar posibles cambios (RF-08, Spec 011)
       if (seleccionado) {
-        await cargarFicha(seleccionado.id);
+        await Promise.all([
+          cargarFicha(seleccionado.id),
+          cargarMovimientosAlumno(seleccionado.id),
+        ]);
       }
     } catch (err) {
       setAmnistiaPendiente(false);
@@ -637,11 +806,43 @@ export default function GestionReputacionPage() {
   return (
     <div>
       <header className="pagina__cabecera">
-        <h1 className="pagina__titulo">Alumnos y gestión de reputación</h1>
-        <p className="pagina__subtitulo">
-          Elige un alumno para consultar su reputación, gestionar sanciones y excepciones, y
-          revisar su historial de préstamos.
-        </p>
+        <div className="formulario">
+          <div>
+            <h1 className="pagina__titulo">Alumnos y gestión de reputación</h1>
+            <p className="pagina__subtitulo">
+              Elige un alumno para consultar su reputación, gestionar sanciones y excepciones, y
+              revisar su historial de préstamos.
+            </p>
+          </div>
+          {!errorUsuarios?.permisos && (
+            <div className="formulario__acciones">
+              <button
+                type="button"
+                className="boton boton--secundario"
+                onClick={descargarCsvGlobal}
+                disabled={descargandoCsvGlobal}
+              >
+                {descargandoCsvGlobal
+                  ? "Descargando historial..."
+                  : "Descargar historial general (CSV)"}
+              </button>
+            </div>
+          )}
+          {errorCsvGlobal && (
+            <div className="alerta alerta--error" role="alert">
+              <span>{errorCsvGlobal.texto}</span>
+              {errorCsvGlobal.reintentable && (
+                <button
+                  type="button"
+                  className="boton boton--secundario boton--sm"
+                  onClick={descargarCsvGlobal}
+                >
+                  Reintentar
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </header>
 
       {errorUsuarios?.permisos ? (
@@ -1009,6 +1210,121 @@ export default function GestionReputacionPage() {
                       )}
                     </>
                   )}
+
+                  {/* Bitácora cronológica de movimientos de reputación (Spec 011, RF-06) */}
+                  {!cargandoFicha && !errorFicha?.permisos && !errorFicha?.noEncontrado && (
+                    <section
+                      className="formulario"
+                      aria-labelledby="titulo-movimientos-reputacion"
+                    >
+                      <div>
+                        <h3 className="tarjeta__titulo" id="titulo-movimientos-reputacion">
+                          Historial de movimientos en el tiempo
+                        </h3>
+                        <div className="formulario__acciones">
+                          <button
+                            type="button"
+                            className="boton boton--secundario boton--sm"
+                            onClick={() => descargarCsvAlumno(seleccionado.id)}
+                            disabled={descargandoCsvAlumno}
+                          >
+                            {descargandoCsvAlumno
+                              ? "Descargando CSV..."
+                              : "Descargar CSV del alumno"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {errorCsvAlumno && (
+                        <div className="alerta alerta--error" role="alert">
+                          <span>{errorCsvAlumno.texto}</span>
+                          {errorCsvAlumno.reintentable && (
+                            <button
+                              type="button"
+                              className="boton boton--secundario boton--sm"
+                              onClick={() => descargarCsvAlumno(seleccionado.id)}
+                            >
+                              Reintentar
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {cargandoMovimientos ? (
+                        <p className="cargando" role="status">
+                          Cargando historial de movimientos...
+                        </p>
+                      ) : errorMovimientos ? (
+                        <div className="alerta alerta--error" role="alert">
+                          <span>{errorMovimientos.texto}</span>
+                          {errorMovimientos.reintentable && (
+                            <button
+                              type="button"
+                              className="boton boton--secundario boton--sm"
+                              onClick={() => cargarMovimientosAlumno(seleccionado.id)}
+                            >
+                              Reintentar
+                            </button>
+                          )}
+                        </div>
+                      ) : movimientosAlumno.length === 0 ? (
+                        <p className="estado-vacio">Sin movimientos de reputación registrados.</p>
+                      ) : (
+                        <div className="tabla__contenedor">
+                          <table className="tabla tabla--apilada">
+                            <thead>
+                              <tr>
+                                <th scope="col">Fecha</th>
+                                <th scope="col">Evento</th>
+                                <th scope="col">Recurso</th>
+                                <th scope="col">Motivo</th>
+                                <th scope="col">Variación</th>
+                                <th scope="col">Saldo</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {movimientosAlumno.map((mov) => {
+                                const variacion = Number(mov.variacion_puntos ?? 0);
+                                const claseVariacion =
+                                  variacion > 0
+                                    ? "insignia--exito"
+                                    : variacion < 0
+                                      ? "insignia--error"
+                                      : "insignia--neutra";
+                                const textoVariacion =
+                                  variacion > 0 ? `+${variacion}` : String(variacion);
+                                return (
+                                  <tr
+                                    key={
+                                      mov.id ??
+                                      `${mov.fecha_movimiento}-${mov.numero_secuencia ?? ""}`
+                                    }
+                                  >
+                                    <td data-etiqueta="Fecha">
+                                      {formatearFecha(mov.fecha_movimiento)}
+                                    </td>
+                                    <td data-etiqueta="Evento">
+                                      {ETIQUETAS_TIPO_MOVIMIENTO[mov.tipo] || mov.tipo}
+                                    </td>
+                                    <td data-etiqueta="Recurso">
+                                      {mov.recurso_nombre || "—"}
+                                    </td>
+                                    <td data-etiqueta="Motivo">{mov.motivo || "—"}</td>
+                                    <td data-etiqueta="Variación">
+                                      <span className={`insignia ${claseVariacion}`}>
+                                        {textoVariacion}
+                                      </span>
+                                    </td>
+                                    <td data-etiqueta="Saldo">{mov.puntaje_resultante}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </section>
+                  )}
                     </>
                   )}
 
@@ -1036,6 +1352,16 @@ export default function GestionReputacionPage() {
                         </div>
                       ) : (
                         <>
+                          <div className="formulario__acciones">
+                            <button
+                              type="button"
+                              className="boton boton--secundario boton--sm"
+                              onClick={descargarPrestamosCsv}
+                            >
+                              Descargar préstamos (CSV)
+                            </button>
+                          </div>
+
                           {errorInspeccion && (
                             <div className="alerta alerta--error" role="alert">
                               {errorInspeccion}

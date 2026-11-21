@@ -26,5 +26,9 @@ class PrestamoRepository(ABC):
         ...
 
     @abstractmethod
+    def obtener_por_recurso(self, id_recurso: UUID) -> list[Prestamo]:
+        ...
+
+    @abstractmethod
     def obtener_todos(self) -> list[Prestamo]:
         ...

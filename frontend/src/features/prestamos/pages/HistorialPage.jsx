@@ -10,11 +10,19 @@ import {
 const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
 
 const CLASE_ESTADO_PRESTAMO = {
-  ACTIVO: "insignia--info",
+  POR_ENTREGAR: "insignia--info",
   ENTREGADO: "insignia--exito",
   DEVUELTO: "insignia--neutra",
   VENCIDO: "insignia--error",
   CANCELADO: "insignia--neutra",
+};
+
+const ETIQUETA_ESTADO_PRESTAMO = {
+  POR_ENTREGAR: "Por entregar",
+  ENTREGADO: "Entregado",
+  DEVUELTO: "Devuelto",
+  VENCIDO: "Vencido",
+  CANCELADO: "Cancelado",
 };
 
 function mostrarFecha(fecha, textoVacio = "—") {
@@ -61,7 +69,9 @@ export default function HistorialPage() {
   const prestamosFiltrados = useMemo(() => {
     if (filtroEstado === "TODOS") return prestamos;
     if (filtroEstado === "ACTIVOS") {
-      return prestamos.filter((p) => p.estado === "ACTIVO" || p.estado === "ENTREGADO");
+      return prestamos.filter(
+        (p) => p.estado === "POR_ENTREGAR" || p.estado === "ENTREGADO" || p.estado === "VENCIDO"
+      );
     }
     return prestamos.filter((p) => p.estado === filtroEstado);
   }, [prestamos, filtroEstado]);
@@ -323,7 +333,7 @@ export default function HistorialPage() {
                           CLASE_ESTADO_PRESTAMO[prestamo.estado] || "insignia--neutra"
                         }`}
                       >
-                        {prestamo.estado}
+                        {ETIQUETA_ESTADO_PRESTAMO[prestamo.estado] || prestamo.estado}
                       </span>
                     </td>
                     <td data-etiqueta="Acciones">

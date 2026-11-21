@@ -6,7 +6,7 @@ Diagrama de clases UML en texto, organizado por **bounded context** y por capas.
 
 | Contexto | Contiene |
 |---|---|
-| `identidad_reputacion` | Usuario, RolUsuario, PerfilReputacion, PuntajeReputacion, NivelReputacion, Sancion, TipoSancion, ExcepcionAcademica, EstadoExcepcion |
+| `identidad_reputacion` | Usuario, RolUsuario, PerfilReputacion, PuntajeReputacion, NivelReputacion, Sancion, TipoSancion, MovimientoReputacion, TipoMovimientoReputacion, ExcepcionAcademica, EstadoExcepcion |
 | `catalogo` | Recurso, FichaTecnica, EstadoRecurso |
 | `reservas` | Reserva, EstadoReserva, AlgoritmoPrioridadService |
 | `prestamos` | Prestamo, EstadoPrestamo, Checklist, TipoChecklist, Garantia, TipoGarantia, EstadoGarantia, CompromisoResponsabilidad |
@@ -45,6 +45,9 @@ Las dependencias apuntan hacia el dominio. El dominio no importa nada de infraes
 - `registrarExcepcion(datos: RegistrarExcepcionDTO): ExcepcionAcademicaDTO` (POST /reputacion/excepciones, valida fecha_fin >= fecha_inicio o 422)
 - `anularExcepcion(idExcepcion: UUID): ExcepcionAcademicaDTO` (PATCH /reputacion/excepciones/{id}/anular)
 - `ejecutarAmnistia(): AmnistiaResponseDTO` (POST /reputacion/amnistia)
+- `listarMovimientosUsuario(idUsuario: UUID): List<MovimientoReputacionDTO>` (GET /reputacion/usuarios/{id}/movimientos, roles `ADMINISTRADOR_SISTEMA`/`GESTOR_ALMACEN`)
+- `exportarCsvMovimientosUsuario(idUsuario: UUID): text/csv` (GET /reputacion/usuarios/{id}/movimientos/csv, roles `ADMINISTRADOR_SISTEMA`/`GESTOR_ALMACEN`)
+- `exportarCsvMovimientosGlobal(): text/csv` (GET /reputacion/movimientos/csv, roles `ADMINISTRADOR_SISTEMA`/`GESTOR_ALMACEN`)
 
 ### `UsuarioController` — identidad_reputacion
 - `listarUsuarios(): List<UsuarioDTO>` (GET /usuarios, roles de gestión)
@@ -67,18 +70,17 @@ Las dependencias apuntan hacia el dominio. El dominio no importa nada de infraes
 - `listarTodasReservas(): List<ReservaDTO>` (GET /reservas, roles de gestión)
 - `consultarCola(idRecurso): List<ReservaDTO>` (GET /reservas/recurso/{id}/cola)
 - `confirmarReserva(idReserva): ReservaDTO` (PATCH /reservas/{id}/confirmar, roles de gestión)
-- `iniciarPrestamo(idReserva): PrestamoDTO` (POST /reservas/{id}/prestamo, roles de gestión, valida ventana inicio - 1h <= ahora <= fin)
+- `iniciarPrestamo(idReserva): PrestamoDTO` (POST /reservas/{id}/prestamo, roles de gestión, valida ventana `inicio - 1h <= ahora <= min(inicio + 30m, fin)`)
 - `cancelarReserva(idReserva): ReservaDTO` (PATCH /reservas/{id}/cancelar, promueve automáticamente al siguiente candidato elegible de la cola)
 
 ### `PrestamoController` — prestamos
-- `solicitarPrestamo(datos): PrestamoDTO` (POST /prestamos, crea préstamo ACTIVO y recurso pasa a EN_USO)
+- `solicitarPrestamo(datos): PrestamoDTO` (POST /prestamos, crea préstamo POR_ENTREGAR y recurso pasa a EN_USO)
 - `completarEntrega(datos): PrestamoDTO` (POST /prestamos/entrega/completar, registra garantía y checklist inicial, pasa a ENTREGADO y premia recogida puntual con +10 pts)
 - `cancelarPrestamo(idPrestamo, datos): PrestamoDTO` (POST /prestamos/{id}/cancelar, en ventanilla antes de entrega física, libera recurso a DISPONIBLE sin penalización)
 - `registrarDevolucion(datos): DevolucionResponseDTO` (POST /prestamos/devolucion, registra checklist de retorno, pasa recurso a DISPONIBLE o MANTENIMIENTO, libera garantía LIBERADA o la retiene RETENIDA, y premia +10 pts o sanciona)
 - `consultarInspecciones(idPrestamo): InspeccionResponseDTO` (GET /prestamos/{id}/inspeccion, expone garantía con fecha_liberacion y checklists)
 - `consultarHistorial(idUsuario): List<PrestamoDTO>` (GET /prestamos/usuarios/{id}/historial)
 - `listarTodosPrestamos(): List<PrestamoDTO>` (GET /prestamos, roles de gestión)
-- `renovarPrestamo(datos): PrestamoDTO` (POST /prestamos/renovar, extiende 7 días antes del vencimiento)
 
 ---
 
@@ -104,9 +106,10 @@ Las dependencias apuntan hacia el dominio. El dominio no importa nada de infraes
 - `aplicar_sancion(idUsuario: UUID, tipo: TipoSancion, motivo: String, montoOpcional: decimal, diasRetraso: int): SancionDTO`
 - `registrar_excepcion(idUsuario: UUID, motivo: String, inicio: DateTime, fin: DateTime): ExcepcionAcademicaDTO` (valida fecha_fin >= fecha_inicio o 422)
 - `anular_excepcion(idExcepcion: UUID): ExcepcionAcademicaDTO` (desactiva la excepción)
-- `premiar_entrega_puntual(idUsuario: UUID): void` (+10 puntos, con tope 1000)
-- `premiar_devolucion_puntual(idUsuario: UUID): void` (+10 puntos, con tope 1000)
-- `ejecutar_amnistia_mensual(): AmnistiaResponseDTO` (+25 puntos con tope 1000 a perfiles en nivel BAJO sin sanciones en los últimos 30 días)
+- `premiar_entrega_puntual(idUsuario: UUID, *, prestamo_id, reserva_id, recurso_id, recurso_nombre): void` (+10 puntos con tope 1000 y registro en bitácora)
+- `premiar_devolucion_puntual(idUsuario: UUID, *, prestamo_id, reserva_id, recurso_id, recurso_nombre): void` (+10 puntos con tope 1000 y registro en bitácora)
+- `ejecutar_amnistia_mensual(): AmnistiaResponseDTO` (+25 puntos con tope 1000 a perfiles en nivel BAJO sin sanciones en los últimos 30 días, con registro en bitácora)
+- `listar_movimientos_usuario(idUsuario: UUID): List<MovimientoReputacionDTO>`, `exportar_csv_usuario(idUsuario: UUID): Tuple[str, str]`, `exportar_csv_global(): Tuple[str, str]` (bitácora cronológica y exportación CSV UTF-8 segura)
 
 ### `RecursoApplicationService` — catalogo
 - `crear_recurso(...)`: valida ficha técnica y crea recurso en DISPONIBLE
@@ -120,19 +123,19 @@ Las dependencias apuntan hacia el dominio. El dominio no importa nada de infraes
 - Inyecta `catalogo_service: RecursoApplicationService` para consultar estado operativo del bien.
 - `crear_reserva(datos, ahora=None): ReservaDTO`: valida recurso operativo (DISPONIBLE o EN_USO), horario institucional (L–V 08:00–20:00), duración (1h a 7d), no pasado (tolerancia 5 min), anticipación máx. 30 días, ausencia de superposiciones del mismo usuario y cupo según `NivelReputacion.limite_operaciones`. Confirma o encola en PENDIENTE.
 - `cancelar_reserva(idReserva: UUID): ReservaDTO`: cancela y promueve automáticamente al candidato prioritario elegible por reputación sin sanciones.
-- `convertir_a_prestamo(idReserva: UUID, ahora=None): PrestamoDTO`: valida estado CONFIRMADA y ventana operativa `inicio - 1h <= ahora <= fin`.
-- `obtener_cola_espera(idRecurso: UUID): List<ReservaDTO>`: cola ordenada por AlgoritmoPrioridadService.
-- `contar_reservas_activas_usuario(idUsuario: UUID): int`: reservas en PENDIENTE o CONFIRMADA.
+- `convertir_a_prestamo(idReserva: UUID, ahora=None): PrestamoDTO`: sincroniza vencimientos, valida estado `CONFIRMADA` y ventana operativa `inicio - 1h <= ahora <= min(inicio + 30m, fin)`.
+- `obtener_cola_espera(idRecurso: UUID): List<ReservaDTO>`: sincroniza vencimientos y ordena la cola vigente por AlgoritmoPrioridadService.
+- `contar_reservas_activas_usuario(idUsuario: UUID): int`: reservas en PENDIENTE o CONFIRMADA (previa sincronización de vencimientos: `PENDIENTE` tras `fecha_fin` → `VENCIDA` sin sanción; `CONFIRMADA` tras `min(inicio + 30m, fin)` → `VENCIDA` con sanción `INASISTENCIA_RESERVA` y sin promover cola).
 
 ### `PrestamoService` — prestamos
 - Inyecta `catalogo_service: RecursoApplicationService` para coordinar estados en catálogo sin acoplamiento a repositorios ajenos.
-- `solicitar_prestamo(...)`: crea agregado en estado ACTIVO y pasa recurso a EN_USO.
-- `cancelar_prestamo(idPrestamo, motivo)`: cancela préstamo ACTIVO en ventanilla y libera recurso a DISPONIBLE sin penalizar reputación.
+- `solicitar_prestamo(...)`: crea agregado en estado `POR_ENTREGAR` y pasa recurso a `EN_USO`.
+- `cancelar_prestamo(idPrestamo, motivo)`: cancela préstamo `POR_ENTREGAR` en ventanilla y libera recurso a `DISPONIBLE` sin penalizar reputación (si ya expiró, sincroniza expiración con sanción y rechaza).
 - `completar_entrega(...)`: valida garantía REGISTRADA y checklist inicial ESTADO_INICIAL completo, pasa a ENTREGADO y premia recogida puntual (+10 pts).
 - `procesar_devolucion(...)`: pasa a DEVUELTO, registra checklist retorno, actualiza recurso a DISPONIBLE o MANTENIMIENTO, libera garantía (LIBERADA con fecha_liberacion) si no hubo daños o la retiene (RETENIDA) ante daños, y premia (+10 pts) o sanciona (TARDANZA, DANO_PARCIAL, DANO_TOTAL).
 - `consultar_inspecciones(idPrestamo: UUID)`: expone garantía con `fecha_liberacion` y checklists.
-- `contar_prestamos_en_curso(idUsuario: UUID): int`: préstamos en ACTIVO, ENTREGADO o VENCIDO.
-- `renovar_prestamo(...)`: extensión de 7 días antes de fecha_fin.
+- `contar_prestamos_en_curso(idUsuario: UUID): int`: sincroniza estados y cuenta préstamos en `POR_ENTREGAR`, `ENTREGADO` o `VENCIDO`.
+- Sincronización automática en consultas y mutaciones sensibles: `POR_ENTREGAR` superado `min(inicio + 30m, fin)` → `CANCELADO` (libera recurso solo si está `EN_USO` y aplica sanción única `INASISTENCIA_RESERVA`); `ENTREGADO` superado `fecha_fin` → `VENCIDO`.
 
 ---
 
@@ -192,6 +195,13 @@ Cada tipo define `puntosDescuento`, `montoDescuento` (deuda registrada) y la reg
 #### `EstadoExcepcion` («enumeration»)
 `VIGENTE`, `PROGRAMADA`, `VENCIDA`, `ANULADA`
 
+#### `MovimientoReputacion` («Entity / Bitácora append-only»)
+- Atributos inmutables (`frozen=True`): `id: UUID`, `usuarioId: UUID`, `tipo: TipoMovimientoReputacion`, `motivo: String`, `puntajeAnterior: int`, `variacionPuntos: int`, `puntajeResultante: int`, `fechaMovimiento: DateTime`, `numeroSecuencia: int`, `sancionId: UUID?`, `prestamoId: UUID?`, `reservaId: UUID?`, `recursoId: UUID?`, `recursoNombre: String?`
+- Invariantes: `0 <= puntajeAnterior, puntajeResultante <= 1000`, `variacionPuntos == puntajeResultante - puntajeAnterior`, `numeroSecuencia >= 1`, append-only sin edición ni borrado.
+
+#### `TipoMovimientoReputacion` («enumeration»)
+`BONIFICACION_ENTREGA_PUNTUAL`, `BONIFICACION_DEVOLUCION_PUNTUAL`, `SANCION`, `AMNISTIA_MENSUAL`, `SALDO_INICIAL_HEREDADO`
+
 ### 📦 catalogo
 
 #### `Recurso` («Aggregate Root»)
@@ -213,6 +223,8 @@ Cada tipo define `puntosDescuento`, `montoDescuento` (deuda registrada) y la reg
   - `crear(usuarioId, recursoId, fechaInicio, fechaFin)`: valida horario institucional de ventanilla (lunes a viernes de 08:00 a 20:00 UTC inclusive tanto en inicio como fin), duración mínima de 1 hora, duración máxima de 7 días, `fechaFin > fechaInicio`. Estado inicial: `PENDIENTE`.
   - `confirmar(fechaActual=None)`: verifica estado `PENDIENTE` y vigencia temporal (`estaVigente(fechaActual)`), pasa a `CONFIRMADA`.
   - `cancelar()`: pasa a `CANCELADA`.
+  - `vencer()`: pasa de `PENDIENTE` o `CONFIRMADA` a `VENCIDA` (rechaza estados terminales).
+  - `limiteRecogida(): DateTime`: retorna `min(fechaInicio + 30m, fechaFin)`.
   - `estaVigente(fechaActual=None): Boolean`: comprueba `fechaFin > ahora` y estado activo.
   - `seSuperponeCon(otra: Reserva): Boolean`: evalúa cruce temporal de intervalos `[inicio, fin)`.
 
@@ -228,15 +240,15 @@ Cada tipo define `puntosDescuento`, `montoDescuento` (deuda registrada) y la reg
 #### `Prestamo` («Aggregate Root»)
 - Atributos: `id`, `reservaId`, `recursoId`, `usuarioId`, `fechaInicio`, `fechaFin`, `estado: EstadoPrestamo`
 - Métodos:
-  - `marcarEntregado()`: pasa de `ACTIVO` a `ENTREGADO`.
+  - `marcarEntregado()`: pasa de `POR_ENTREGAR` a `ENTREGADO`.
+  - `vencer(fechaActual=None)`: exige estado `ENTREGADO`, pasa a `VENCIDO`.
   - `devolver(fechaDevolucion: DateTime): int`: pasa a `DEVUELTO` y retorna los días de retraso.
-  - `cancelar(motivo: String)`: exige estado `ACTIVO`, pasa a `CANCELADO` y permite liberar el recurso en catálogo.
-  - `renovar(dias: int, fechaActual: DateTime)`: extiende `fechaFin` en 7 días si no ha vencido.
+  - `cancelar(motivo: String)`: exige estado `POR_ENTREGAR`, pasa a `CANCELADO` y permite liberar el recurso en catálogo.
+  - `limiteRecogida(): DateTime`: retorna `min(fechaInicio + 30m, fechaFin)`.
   - `calcularDiasRetraso(fechaReferencia: DateTime): int`
-  - `solicitarProrroga(dias: int, fechaActual: DateTime): Boolean`
 
 #### `EstadoPrestamo` («enumeration»)
-`ACTIVO`, `ENTREGADO`, `DEVUELTO`, `VENCIDO`, `CANCELADO`
+`POR_ENTREGAR`, `ENTREGADO`, `DEVUELTO`, `VENCIDO`, `CANCELADO`
 
 #### `Checklist` («Aggregate Root»)
 - Atributos: `id`, `prestamoId`, `tipo: TipoChecklist`, `fechaInspeccion`, `observaciones`, `fotosUrls`, `completo: Boolean`

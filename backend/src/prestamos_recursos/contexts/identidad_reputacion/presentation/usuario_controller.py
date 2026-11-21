@@ -43,6 +43,9 @@ def get_usuario_service(
     from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_excepcion_academica_repository import (
         SqlExcepcionAcademicaRepository,
     )
+    from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_movimiento_reputacion_repository import (
+        SqlMovimientoReputacionRepository,
+    )
     from prestamos_recursos.contexts.identidad_reputacion.infrastructure.repositories.sql_perfil_reputacion_repository import (
         SqlPerfilReputacionRepository,
     )
@@ -72,11 +75,13 @@ def get_usuario_service(
     prestamo_repo = SqlPrestamoRepository(session)
     perfil_repo = SqlPerfilReputacionRepository(session)
     excepcion_repo = SqlExcepcionAcademicaRepository(session)
+    movimiento_repo = SqlMovimientoReputacionRepository(session)
 
     reputacion_service = ReputacionService(
         perfil_reputacion_repository=perfil_repo,
         excepcion_academica_repository=excepcion_repo,
         usuario_repository=usuario_repo,
+        movimiento_reputacion_repository=movimiento_repo,
     )
     catalogo_service = RecursoApplicationService(recurso_repo)
     prestamo_service = PrestamoService(
@@ -91,6 +96,7 @@ def get_usuario_service(
         reserva_repository=reserva_repo,
         prestamo_service=prestamo_service,
         reputacion_service=reputacion_service,
+        catalogo_service=catalogo_service,
     )
     return UsuarioService(
         usuario_repository=usuario_repo,

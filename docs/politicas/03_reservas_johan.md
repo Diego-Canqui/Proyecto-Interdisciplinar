@@ -72,10 +72,13 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
    - Al procesar `crear_reserva`, `ReservaService` valida el estado del recurso mediante `RecursoApplicationService`.
    - Se admiten recursos en estado `DISPONIBLE` y `EN_USO` (para fechas futuras o lista de espera).
    - Se rechazan reservas para recursos en `MANTENIMIENTO` o `FUERA_DE_SERVICIO` con `409 Conflict` (`"el recurso no admite reservas por encontrarse en mantenimiento o fuera de servicio"`).
-2. **Ventana temporal de conversión a préstamo:**
+2. **Ventana temporal de conversión a préstamo y vencimiento automático (Spec 007 / Spec 010):**
    - La conversión a préstamo en ventanilla (`convertir_a_prestamo`) exige que el instante actual se encuentre dentro del intervalo:
-     `fecha_inicio - 1 hora <= ahora <= fecha_fin`
-   - Si se intenta iniciar el préstamo antes de 1 hora del inicio pactado o después de que la reserva haya vencido, se rechaza con `409 Conflict`.
+     `fecha_inicio - 1 hora <= ahora <= min(fecha_inicio + 30 minutos, fecha_fin)`
+   - Si se intenta iniciar el préstamo antes de 1 hora del inicio pactado se rechaza con `409 Conflict`. Si ya superó `min(fecha_inicio + 30 minutos, fecha_fin)`, se persiste el vencimiento automático de la reserva (`VENCIDA`), se aplica una única sanción `INASISTENCIA_RESERVA` y se rechaza la conversión con `409 Conflict`.
+   - **Sincronización automática en consultas y colas de espera (Spec 010):**
+     - Una reserva `PENDIENTE` cuya `fecha_fin` ya pasó transiciona automáticamente a `VENCIDA` sin sanción.
+     - Una reserva `CONFIRMADA` que supera `min(fecha_inicio + 30 minutos, fecha_fin)` sin convertirse en préstamo transiciona automáticamente a `VENCIDA`, aplica una única sanción `INASISTENCIA_RESERVA` (respetando excepciones académicas vigentes) y **no** promueve automáticamente la cola `PENDIENTE`.
 
 ---
 
@@ -86,6 +89,8 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
   - `Reserva.crear(...)`: Valida horario hábil institucional (Lunes a Viernes 08:00 a 20:00 UTC), duración mínima (1h) y máxima (7d), e inicializa el estado en `PENDIENTE`. `__post_init__` valida que `fecha_fin > fecha_inicio`.
   - `confirmar(fecha_actual)`: Verifica que esté `PENDIENTE` y vigente en el instante evaluado (`esta_vigente(fecha_actual)`), y cambia el estado a `CONFIRMADA`.
   - `cancelar()`: Impide cancelar una reserva `CANCELADA`, `VENCIDA` o `CONVERTIDA` y pasa el estado a `CANCELADA`.
+  - `vencer()`: Pasa de `PENDIENTE` o `CONFIRMADA` a `VENCIDA` (rechaza estados terminales `CANCELADA`, `VENCIDA` y `CONVERTIDA`).
+  - `limite_recogida()`: Retorna `min(fecha_inicio + 30 minutos, fecha_fin)` en UTC.
   - `esta_vigente(fecha_actual)`: Comprueba si `fecha_fin >= ahora` y el estado está activo (`PENDIENTE` o `CONFIRMADA`).
   - `se_superpone_con(otra: Reserva) -> bool`: Compara en UTC si dos intervalos `[fecha_inicio, fecha_fin)` se solapan.
 - **`services/algoritmo_prioridad_service.py` (`AlgoritmoPrioridadService`)**:
@@ -96,7 +101,8 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
   - Desacople DDD mediante `RecursoApplicationService` inyectado como `catalogo_service`.
   - `crear_reserva(datos, ahora=None)`: Valida estado del recurso, ventana de creación (no pasado con 5 min de tolerancia, máx. 30 días de anticipación), superposición con el mismo usuario y confirma o encola en `PENDIENTE`.
   - `cancelar_reserva(id_reserva)`: Cancela la reserva y promueve automáticamente al mejor candidato elegible saltando sancionados.
-  - `convertir_a_prestamo(id_reserva, ahora=None)`: Valida ventana operativa `inicio - 1h <= ahora <= fin` y delega en `PrestamoService`.
+  - `convertir_a_prestamo(id_reserva, ahora=None)`: Sincroniza vencimientos, valida ventana operativa `inicio - 1h <= ahora <= min(inicio + 30m, fin)` y delega en `PrestamoService`.
+  - Sincronización automática en consultas (`listar_reservas_usuario`, `listar_todas_reservas`, `obtener_cola_espera`, `contar_reservas_activas_usuario`): transiciona `PENDIENTE → VENCIDA` (sin sanción) y `CONFIRMADA → VENCIDA` (con sanción única `INASISTENCIA_RESERVA`, sin promoción de cola).
 
 ### Capa de Presentación y Frontend
 - **`presentation/reserva_controller.py`**:
@@ -111,6 +117,6 @@ El servicio `AlgoritmoPrioridadService.ordenar_cola_espera(reservas, puntajes_re
 
 ## 4. Limitaciones conocidas
 
-- **`VENCIDA` sin asignación automática:** el estado existe en `EstadoReserva` y bloquea la cancelación, pero ninguna tarea lo asigna cuando el usuario no se presenta: una reserva `CONFIRMADA` solo cambia por confirmación, cancelación o conversión a préstamo. La sanción `INASISTENCIA_RESERVA` también se registra manualmente.
+- **Sincronización síncrona sin worker en segundo plano:** el paso a `VENCIDA` (y la sanción `INASISTENCIA_RESERVA` para `CONFIRMADA`) se ejecuta de forma síncrona al consultar reservas/colas o al intentar convertir/operar, no mediante tareas programadas (cron).
 - **Sin bloqueo exclusivo de stock por reserva futura:** al crear una reserva se verifica que el recurso no esté en `MANTENIMIENTO` ni `FUERA_DE_SERVICIO`, pero no se cambia el estado del recurso a «reservado» (el catálogo solo tiene `DISPONIBLE`, `EN_USO`, `MANTENIMIENTO` y `FUERA_DE_SERVICIO`).
 - **Dependencias de código:** `ReservaService` importa `PrestamoService` y `NivelReputacion`; las referencias de datos siguen siendo solo por ID.
