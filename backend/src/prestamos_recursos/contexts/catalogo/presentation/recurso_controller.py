@@ -12,6 +12,7 @@ from prestamos_recursos.contexts.catalogo.application.dto.recurso_dto import (
     RecursoDTO,
 )
 from prestamos_recursos.contexts.catalogo.application.services import RecursoApplicationService
+from prestamos_recursos.contexts.catalogo.domain.enums.estado_recurso import EstadoRecurso
 from prestamos_recursos.contexts.catalogo.infrastructure.repositories import SqlRecursoRepository
 from prestamos_recursos.contexts.identidad_reputacion.application.dto.usuario_dto import (
     UsuarioDTO,
@@ -22,10 +23,45 @@ from prestamos_recursos.contexts.identidad_reputacion.domain.enums.rol_usuario i
 from prestamos_recursos.contexts.identidad_reputacion.presentation.dependencies import (
     require_roles,
 )
+from prestamos_recursos.contexts.prestamos.application.prestamo_service import PrestamoService
+from prestamos_recursos.contexts.prestamos.infrastructure.repositories.sql_checklist_repository import (
+    SqlChecklistRepository,
+)
+from prestamos_recursos.contexts.prestamos.infrastructure.repositories.sql_garantia_repository import (
+    SqlGarantiaRepository,
+)
+from prestamos_recursos.contexts.prestamos.infrastructure.repositories.sql_prestamo_repository import (
+    SqlPrestamoRepository,
+)
 from prestamos_recursos.shared.database import get_session
 
 router = APIRouter(prefix="/recursos", tags=["Recursos"])
 _solo_gestion = require_roles(RolUsuario.ADMINISTRADOR_SISTEMA, RolUsuario.GESTOR_ALMACEN)
+
+
+def _enriquecer_disponible_desde(
+    recursos: list[RecursoDTO],
+    session: Session,
+    catalogo_service: RecursoApplicationService,
+) -> list[RecursoDTO]:
+    """Completa disponible_desde con la fecha_fin del préstamo en curso para recursos EN_USO."""
+    if not any(r.estado == EstadoRecurso.EN_USO for r in recursos):
+        return recursos
+    try:
+        prestamo_service = PrestamoService(
+            prestamo_repository=SqlPrestamoRepository(session),
+            checklist_repository=SqlChecklistRepository(session),
+            garantia_repository=SqlGarantiaRepository(session),
+            catalogo_service=catalogo_service,
+        )
+        for recurso in recursos:
+            if recurso.estado == EstadoRecurso.EN_USO:
+                recurso.disponible_desde = prestamo_service.obtener_disponible_desde_recurso(
+                    recurso.id
+                )
+    except Exception:  # noqa: BLE001
+        return recursos
+    return recursos
 
 
 @router.get("", response_model=list[RecursoDTO])
@@ -35,7 +71,8 @@ def buscar_recursos(
 ):
     repo = SqlRecursoRepository(session)
     service = RecursoApplicationService(repo)
-    return service.buscar(filtro)
+    recursos = service.buscar(filtro)
+    return _enriquecer_disponible_desde(recursos, session, service)
 
 
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
@@ -85,7 +122,7 @@ def obtener_ficha_tecnica(
     recurso_dto = service.obtener_ficha_tecnica(id_recurso)
     if not recurso_dto:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recurso no encontrado")
-    return recurso_dto
+    return _enriquecer_disponible_desde([recurso_dto], session, service)[0]
 
 
 @router.put("/{id_recurso}", response_model=RecursoDTO)

@@ -38,6 +38,10 @@ from prestamos_recursos.contexts.prestamos.infrastructure.repositories.sql_garan
 from prestamos_recursos.contexts.prestamos.infrastructure.repositories.sql_prestamo_repository import (
     SqlPrestamoRepository,
 )
+from prestamos_recursos.contexts.reservas.application.reserva_service import ReservaService
+from prestamos_recursos.contexts.reservas.infrastructure.repositories.sql_reserva_repository import (
+    SqlReservaRepository,
+)
 from prestamos_recursos.shared.database import get_session
 
 
@@ -52,10 +56,18 @@ def get_prestamo_service(
         movimiento_reputacion_repository=SqlMovimientoReputacionRepository(session),
     )
     catalogo_service = RecursoApplicationService(SqlRecursoRepository(session))
-    return PrestamoService(
+    prestamo_service = PrestamoService(
         prestamo_repository=SqlPrestamoRepository(session),
         checklist_repository=SqlChecklistRepository(session),
         garantia_repository=SqlGarantiaRepository(session),
         reputacion_service=reputacion_service,
         catalogo_service=catalogo_service,
     )
+    reserva_service = ReservaService(
+        reserva_repository=SqlReservaRepository(session),
+        prestamo_service=prestamo_service,
+        reputacion_service=reputacion_service,
+        catalogo_service=catalogo_service,
+    )
+    prestamo_service.vincular_reserva_service(reserva_service)
+    return prestamo_service

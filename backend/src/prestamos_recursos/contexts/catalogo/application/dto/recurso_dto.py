@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -21,6 +22,7 @@ class RecursoDTO(BaseModel):
     estado_fisico: str | None = None
     foto_url: str | None = None
     especificaciones: dict[str, Any] = Field(default_factory=dict)
+    disponible_desde: datetime | None = None
 
 
 class CrearRecursoDTO(BaseModel):

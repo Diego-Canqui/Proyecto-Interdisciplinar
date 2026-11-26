@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
   buscarRecursos,
@@ -9,6 +9,7 @@ import {
 } from "../api.js";
 import { obtenerPerfil, listarUsuarios } from "../../identidad/api.js";
 import { consultarHistorialRecurso } from "../../prestamos/api.js";
+import { HistorialRecursoPanel } from "../components/HistorialRecursoPanel.jsx";
 
 const ROLES_GESTION = ["GESTOR_ALMACEN", "ADMINISTRADOR_SISTEMA"];
 
@@ -80,6 +81,24 @@ const normalizarTextoOpcional = (valor) => {
   const limpio = (valor || "").trim();
   return limpio ? limpio : null;
 };
+
+function formatearAvisoEnUso(disponibleDesde) {
+  if (!disponibleDesde) {
+    return "El recurso está siendo usado. Puedes reservarlo para un horario posterior (quedará pendiente hasta su devolución).";
+  }
+  const fecha = new Date(disponibleDesde);
+  if (Number.isNaN(fecha.getTime())) {
+    return "El recurso está siendo usado. Puedes reservarlo para un horario posterior (quedará pendiente hasta su devolución).";
+  }
+  if (fecha <= new Date()) {
+    return "El recurso está siendo usado y tiene una devolución pendiente.";
+  }
+  const textoFecha = new Intl.DateTimeFormat("es-PE", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(fecha);
+  return `El recurso está siendo usado. Disponible aprox. desde el ${textoFecha}.`;
+}
 
 const construirPayloadRecurso = (formulario) => {
   const ocultarCamposHardware = esCategoriaLibro(formulario.categoria);
@@ -474,12 +493,14 @@ export default function BuscarRecursosPage() {
   const [nuevoEstadoSeleccionado, setNuevoEstadoSeleccionado] = useState("");
   const [actualizandoEstado, setActualizandoEstado] = useState(false);
 
-  // Historial de préstamos del recurso (solo gestión)
-  const [mostrarHistorialRecurso, setMostrarHistorialRecurso] = useState(false);
+  // Pestaña activa y historial de préstamos del recurso (solo gestión)
+  const [pestanaDetalle, setPestanaDetalle] = useState("ficha");
   const [historialRecurso, setHistorialRecurso] = useState([]);
   const [cargandoHistorial, setCargandoHistorial] = useState(false);
   const [errorHistorial, setErrorHistorial] = useState(null);
   const [usuariosPorId, setUsuariosPorId] = useState({});
+  const idPedidoHistorial = useRef(null);
+  const formularioEdicionRef = useRef(null);
 
   const esGestion = Boolean(
     usuario?.roles?.some((rol) => ROLES_GESTION.includes(rol))
@@ -514,9 +535,11 @@ export default function BuscarRecursosPage() {
   const handleSeleccionarRecurso = async (recurso) => {
     setRecursoSeleccionado(recurso);
     setNuevoEstadoSeleccionado(recurso.estado);
-    setMostrarHistorialRecurso(false);
     setFichaTecnica(null);
     setCargandoFicha(true);
+    if (esGestion && pestanaDetalle === "historial") {
+      cargarHistorialRecurso(recurso.id);
+    }
     try {
       const fichaData = await obtenerFichaTecnica(recurso.id);
       setFichaTecnica(fichaData);
@@ -566,7 +589,6 @@ export default function BuscarRecursosPage() {
     const origen = fichaTecnica || recursoSeleccionado;
     if (!origen) return;
     setMostrarModalCrear(false);
-    setMostrarHistorialRecurso(false);
     setEditandoRecurso({
       nombre: origen.nombre || "",
       descripcion: origen.descripcion || "",
@@ -579,33 +601,46 @@ export default function BuscarRecursosPage() {
       foto_url: origen.foto_url || "",
       especificaciones: convertirEspecificacionesALista(origen.especificaciones),
     });
+    requestAnimationFrame(() => {
+      formularioEdicionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   };
 
-  const abrirHistorialRecurso = async () => {
-    if (!recursoSeleccionado || !esGestion) return;
-    setMostrarModalCrear(false);
-    setEditandoRecurso(null);
-    setMostrarHistorialRecurso(true);
+  const cargarHistorialRecurso = async (idRecurso) => {
+    if (!idRecurso || !esGestion) return;
+    idPedidoHistorial.current = idRecurso;
     setCargandoHistorial(true);
     setErrorHistorial(null);
     try {
+      const yaHayUsuarios = Object.keys(usuariosPorId).length > 0;
       const [prestamos, usuarios] = await Promise.all([
-        consultarHistorialRecurso(recursoSeleccionado.id),
-        listarUsuarios().catch(() => []),
+        consultarHistorialRecurso(idRecurso),
+        yaHayUsuarios ? Promise.resolve(null) : listarUsuarios().catch(() => []),
       ]);
-      const mapaUsuarios = {};
+      if (idPedidoHistorial.current !== idRecurso) return;
       if (Array.isArray(usuarios)) {
+        const mapaUsuarios = {};
         usuarios.forEach((u) => {
           mapaUsuarios[u.id] = u;
         });
+        setUsuariosPorId(mapaUsuarios);
       }
-      setUsuariosPorId(mapaUsuarios);
       setHistorialRecurso(Array.isArray(prestamos) ? prestamos : []);
     } catch (err) {
+      if (idPedidoHistorial.current !== idRecurso) return;
       setErrorHistorial(err?.message || "No se pudo cargar el historial de préstamos del recurso.");
       setHistorialRecurso([]);
     } finally {
-      setCargandoHistorial(false);
+      if (idPedidoHistorial.current === idRecurso) {
+        setCargandoHistorial(false);
+      }
+    }
+  };
+
+  const cambiarPestanaDetalle = (pestana) => {
+    setPestanaDetalle(pestana);
+    if (pestana === "historial" && recursoSeleccionado && esGestion) {
+      cargarHistorialRecurso(recursoSeleccionado.id);
     }
   };
 
@@ -707,70 +742,17 @@ export default function BuscarRecursosPage() {
 
       {/* Formulario de edición para Gestor/Administrador */}
       {editandoRecurso && esGestion && recursoSeleccionado && (
-        <FormularioRecurso
-          idPrefix="editar"
-          titulo={`Editar Recurso: ${recursoSeleccionado.nombre}`}
-          valores={editandoRecurso}
-          onChange={setEditandoRecurso}
-          onSubmit={handleEditarRecurso}
-          onCancelar={() => setEditandoRecurso(null)}
-          guardando={guardandoEdicion}
-          textoGuardar="Guardar cambios"
-        />
-      )}
-
-      {/* Historial de préstamos del recurso (solo Gestor/Administrador) */}
-      {mostrarHistorialRecurso && esGestion && recursoSeleccionado && (
-        <div className="tarjeta" style={{ marginBottom: "2rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
-            <h2 style={{ margin: 0 }}>
-              Historial de préstamos: {recursoSeleccionado.nombre}
-            </h2>
-            <button
-              type="button"
-              className="boton boton--secundario"
-              onClick={() => setMostrarHistorialRecurso(false)}
-            >
-              Cerrar
-            </button>
-          </div>
-          {cargandoHistorial ? (
-            <p className="cargando" role="status">Cargando historial de préstamos...</p>
-          ) : errorHistorial ? (
-            <div className="alerta alerta--error" role="alert">{errorHistorial}</div>
-          ) : historialRecurso.length === 0 ? (
-            <p className="estado-vacio">Este recurso aún no registra préstamos.</p>
-          ) : (
-            <div className="tabla-contenedor">
-              <table className="tabla">
-                <thead>
-                  <tr>
-                    <th>Usuario</th>
-                    <th>Estado</th>
-                    <th>Inicio</th>
-                    <th>Fin</th>
-                    <th>Entrega real</th>
-                    <th>Devolución real</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historialRecurso.map((p) => {
-                    const u = usuariosPorId[p.usuario_id];
-                    return (
-                      <tr key={p.id}>
-                        <td>{u ? `${u.nombre} (${u.correo})` : p.usuario_id}</td>
-                        <td>{p.estado}</td>
-                        <td>{new Date(p.fecha_inicio).toLocaleString()}</td>
-                        <td>{new Date(p.fecha_fin).toLocaleString()}</td>
-                        <td>{p.fecha_entrega_real ? new Date(p.fecha_entrega_real).toLocaleString() : "—"}</td>
-                        <td>{p.fecha_devolucion_real ? new Date(p.fecha_devolucion_real).toLocaleString() : "—"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+        <div ref={formularioEdicionRef}>
+          <FormularioRecurso
+            idPrefix="editar"
+            titulo={`Editar Recurso: ${recursoSeleccionado.nombre}`}
+            valores={editandoRecurso}
+            onChange={setEditandoRecurso}
+            onSubmit={handleEditarRecurso}
+            onCancelar={() => setEditandoRecurso(null)}
+            guardando={guardandoEdicion}
+            textoGuardar="Guardar cambios"
+          />
         </div>
       )}
 
@@ -847,6 +829,18 @@ export default function BuscarRecursosPage() {
                     </span>
                   </div>
                   <p style={{ margin: "0.5rem 0 0", fontSize: "0.9rem" }}>{r.descripcion}</p>
+                  {r.estado === "EN_USO" && (
+                    <p
+                      style={{
+                        margin: "0.5rem 0 0",
+                        fontSize: "0.85rem",
+                        color: "var(--primario, #1d4ed8)",
+                        fontWeight: 500,
+                      }}
+                    >
+                      ℹ️ {formatearAvisoEnUso(r.disponible_desde)}
+                    </p>
+                  )}
                 </article>
               );
             })}
@@ -858,14 +852,53 @@ export default function BuscarRecursosPage() {
           <h2 style={{ fontSize: "1.2rem", marginBottom: "0.75rem" }}>Detalle y Ficha Técnica</h2>
           {recursoSeleccionado ? (
             <div className="tarjeta" style={{ position: "sticky", top: "1rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", marginBottom: "1rem" }}>
                 <h3 style={{ margin: 0, fontSize: "1.2rem" }}>{recursoSeleccionado.nombre}</h3>
                 <span className={`insignia ${CLASE_ESTADO[recursoSeleccionado.estado] || "insignia--neutra"}`}>
                   {recursoSeleccionado.estado}
                 </span>
               </div>
 
-              {cargandoFicha ? (
+              {esGestion && (
+                <div
+                  className="pestanas"
+                  role="tablist"
+                  aria-label="Secciones del detalle del recurso"
+                  style={{ marginBottom: "1rem" }}
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={pestanaDetalle === "ficha"}
+                    className={`pestanas__boton ${
+                      pestanaDetalle === "ficha" ? "pestanas__boton--activa" : ""
+                    }`}
+                    onClick={() => cambiarPestanaDetalle("ficha")}
+                  >
+                    Ficha técnica
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={pestanaDetalle === "historial"}
+                    className={`pestanas__boton ${
+                      pestanaDetalle === "historial" ? "pestanas__boton--activa" : ""
+                    }`}
+                    onClick={() => cambiarPestanaDetalle("historial")}
+                  >
+                    Historial de préstamos
+                  </button>
+                </div>
+              )}
+
+              {esGestion && pestanaDetalle === "historial" ? (
+                <HistorialRecursoPanel
+                  prestamos={historialRecurso}
+                  usuariosPorId={usuariosPorId}
+                  cargando={cargandoHistorial}
+                  error={errorHistorial}
+                />
+              ) : cargandoFicha ? (
                 <p className="cargando">Cargando especificaciones...</p>
               ) : fichaTecnica ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
@@ -926,7 +959,7 @@ export default function BuscarRecursosPage() {
                           </Link>
                           {recursoSeleccionado.estado === "EN_USO" && (
                             <p style={{ fontSize: "0.85rem", color: "var(--texto-secundario)", marginTop: "0.5rem", marginBottom: 0, textAlign: "center" }}>
-                              ℹ️ Este recurso está actualmente en uso, pero se puede reservar para una fecha futura o entrar en lista de espera.
+                              ℹ️ {formatearAvisoEnUso(fichaTecnica?.disponible_desde ?? recursoSeleccionado.disponible_desde)}
                             </p>
                           )}
                         </>
@@ -938,11 +971,11 @@ export default function BuscarRecursosPage() {
                     </div>
                   )}
 
-                  {/* Acciones de gestión de almacén: cambiar estado */}
+                  {/* Acciones de gestión de almacén: cambiar estado y editar */}
                   {esGestion && (
                     <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--borde)" }}>
                       <label className="campo__etiqueta" style={{ marginBottom: "0.5rem" }}>
-                        🛠️ Cambiar estado operativo (Gestión):
+                        Estado operativo (Gestión):
                       </label>
                       <div style={{ display: "flex", gap: "0.5rem" }}>
                         <select
@@ -970,15 +1003,7 @@ export default function BuscarRecursosPage() {
                         style={{ marginTop: "0.75rem" }}
                         onClick={abrirModalEdicion}
                       >
-                        ✏️ Editar datos del recurso
-                      </button>
-                      <button
-                        type="button"
-                        className="boton boton--secundario boton--bloque"
-                        style={{ marginTop: "0.5rem" }}
-                        onClick={abrirHistorialRecurso}
-                      >
-                        📋 Ver historial de préstamos
+                        Editar datos del recurso
                       </button>
                     </div>
                   )}

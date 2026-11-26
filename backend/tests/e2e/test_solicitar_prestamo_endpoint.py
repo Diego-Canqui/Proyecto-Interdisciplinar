@@ -249,7 +249,7 @@ def test_flujo_e2e_reserva_espera_y_promocion():
 	reserva1 = resp1.json()
 	assert reserva1["estado"] == "CONFIRMADA"
 
-	# 2. Usuario 2 reserva mismo horario -> 201 PENDIENTE
+	# 2. Usuario 2 reserva mismo horario -> 409 (sin cola de espera)
 	app.dependency_overrides[get_current_user] = lambda: u2
 	datos_u2 = {
 		"usuario_id": str(u2_id),
@@ -258,28 +258,27 @@ def test_flujo_e2e_reserva_espera_y_promocion():
 		"fecha_fin": fin,
 	}
 	resp2 = client.post("/reservas", json=datos_u2)
-	assert resp2.status_code == 201
-	reserva2 = resp2.json()
-	assert reserva2["estado"] == "PENDIENTE"
+	assert resp2.status_code == 409
+	assert "puedes prestarte desde el" in resp2.json()["detail"]
 
-	# 3. Usuario 2 intenta reservar de nuevo mismo horario -> 409
-	resp_duplicada = client.post("/reservas", json=datos_u2)
+	# 3. Usuario 1 intenta reservar de nuevo mismo horario -> 409
+	app.dependency_overrides[get_current_user] = lambda: u1
+	resp_duplicada = client.post("/reservas", json=datos_u1)
 	assert resp_duplicada.status_code == 409
 	assert resp_duplicada.json()["detail"] == (
 		"ya tienes una reserva activa para este recurso en ese horario"
 	)
 
 	# 4. Usuario 1 cancela su reserva confirmada -> 200 CANCELADA
-	app.dependency_overrides[get_current_user] = lambda: u1
 	cancelar_resp = client.patch(f"/reservas/{reserva1['id']}/cancelar")
 	assert cancelar_resp.status_code == 200
 	assert cancelar_resp.json()["estado"] == "CANCELADA"
 
-	# 5. Reserva de Usuario 2 es promovida automáticamente a CONFIRMADA
+	# 5. Ahora Usuario 2 sí puede reservar ese horario -> 201 CONFIRMADA
 	app.dependency_overrides[get_current_user] = lambda: u2
-	consulta_resp = client.get(f"/reservas/{reserva2['id']}")
-	assert consulta_resp.status_code == 200
-	assert consulta_resp.json()["estado"] == "CONFIRMADA"
+	resp2_libre = client.post("/reservas", json=datos_u2)
+	assert resp2_libre.status_code == 201
+	assert resp2_libre.json()["estado"] == "CONFIRMADA"
 
 
 @pytest.mark.e2e

@@ -1,0 +1,99 @@
+INFORME FINAL DEL SISTEMA DE GESTION DE PRESTAMOS DE RECURSOS
+
+====================================================================
+PARTE 1: INFORME DEL SISTEMA (MODELO Y PRINCIPALES MODULOS)
+====================================================================
+
+1. DESCRIPCION GENERAL
+El Sistema de Gestion de Prestamos de Recursos es una aplicacion web disenada para administrar el inventario, las reservas, la entrega en ventanilla, las devoluciones y la reputacion de los usuarios dentro de una institucion academica (UNSA).
+
+Stack tecnologico utilizado:
+- Backend: Python 3.11+, FastAPI, SQLAlchemy 2.0, Pydantic v2, PyJWT, bcrypt y slowapi.
+- Frontend: React 18 con Vite y CSS con tokens de diseno (Teal Campus).
+- Base de datos: PostgreSQL 16 ejecutado en contenedor Docker.
+- Calidad y pruebas: Pytest (pruebas unitarias, de integracion y e2e; mas de 590 pruebas automatizadas) y Ruff para analisis estatico.
+
+2. ARQUITECTURA Y MODELO DEL SISTEMA (DDD)
+El sistema sigue una arquitectura orientada al dominio (Domain-Driven Design - DDD) dividida en 4 contextos delimitados (Bounded Contexts), cada uno con su propio esquema independiente en PostgreSQL y estructurado en 4 capas:
+
+- Presentation: controladores REST en FastAPI, validacion de entrada y control de acceso por roles.
+- Application: servicios de aplicacion que orquestan los casos de uso y DTOs.
+- Domain: entidades, agregados raiz, value objects, enums, servicios de dominio e interfaces de repositorio (sin dependencias de frameworks ni base de datos).
+- Infrastructure: modelos ORM de SQLAlchemy e implementaciones SQL de repositorios.
+
+Reglas clave del modelo:
+- Aislamiento entre contextos: las referencias entre modulos se realizan unicamente mediante identificadores (usuario_id, recurso_id, reserva_id). Cuando un modulo requiere informacion o acciones de otro, se comunica a traves de su servicio de aplicacion.
+- Manejo de transacciones: una unica sesion por peticion HTTP realiza el commit o rollback al finalizar; los repositorios solo ejecutan flush.
+- Seguridad: contrasenas almacenadas con hash bcrypt, autenticacion con tokens JWT HS256 y autorizacion por roles (ESTUDIANTE, DOCENTE, PERSONAL_ADMINISTRATIVO, GESTOR_ALMACEN y ADMINISTRADOR_SISTEMA).
+
+Modelo de datos por esquema en PostgreSQL:
+- Esquema identidad_reputacion: tablas usuario, perfiles_reputacion, sancion, excepciones_academicas y movimientos_reputacion.
+- Esquema catalogo: tabla recursos (incluye campo JSON especificaciones para fichas adaptables).
+- Esquema reservas: tabla reservas.
+- Esquema prestamos: tablas prestamos, garantias y checklists.
+
+3. EXPLICACION DE LOS PRINCIPALES MODULOS
+
+3.1 Modulo de Identidad y Reputacion (identidad_reputacion)
+Gestiona el registro, inicio de sesion, administracion de usuarios y el sistema de reputacion dinamica.
+- Autenticacion y roles: permite registro de usuarios, login con JWT y control de acceso jerarquico. El administrador puede crear cuentas, cambiar roles, activar/desactivar cuentas y eliminar usuarios (validando que no tengan reservas activas ni prestamos en curso).
+- Reputacion dinamica: todo usuario inicia con 500 puntos (nivel NORMAL). Los niveles son BAJO (0-299, limite 1 operacion), NORMAL (300-599, limite 2), BUENO (600-799, limite 3) y EXCELENTE (800-1000, limite 5).
+- Bonificaciones y sanciones: entrega y devolucion puntuales suman +10 puntos (tope 1000). Las faltas generan sanciones tipificadas: TARDANZA (-10 pts), INASISTENCIA_RESERVA (-15 pts, bloqueo 3 dias), DANO_PARCIAL (-30 pts, bloqueo 30 dias) y DANO_TOTAL (-100 pts, bloqueo 60 dias).
+- Excepciones academicas y amnistia: el personal de gestion puede registrar o anular excepciones academicas vigentes (que cubren tardanzas e inasistencias) y ejecutar amnistia mensual (+25 pts a usuarios en nivel BAJO sin sanciones en 30 dias).
+- Bitacora de trazabilidad y CSV: tabla append-only de movimientos de reputacion que registra cada variacion de puntaje con su motivo y recurso asociado, con exportacion a archivo CSV individual y global para auditoria.
+- Interfaz de gestion (/gestion-reputacion): vista maestro-detalle de alumnos con pestanas de Reputacion/Sanciones, Historial de Prestamos y Bitacora de Movimientos.
+
+3.2 Modulo de Catalogo de Recursos (catalogo)
+Administra el inventario fisico de equipos, materiales de laboratorio, equipos multimedia y libros.
+- Entidad Recurso y FichaTecnica adaptable: soporta atributos tecnicos opcionales (marca, modelo, numero de serie, color) y un campo flexible de especificaciones (por ejemplo, autor, editorial, ISBN y edicion para libros; procesador y RAM para laptops).
+- Estados operativos: DISPONIBLE, EN_USO, MANTENIMIENTO y FUERA_DE_SERVICIO.
+- Gestion e historial (/recursos): buscador en tiempo real, creacion y edicion de recursos, cambio de estado operativo y vista maestro-detalle con pestanas (Ficha tecnica e Historial de prestamos para gestion).
+
+3.3 Modulo de Reservas (reservas)
+Gestiona la planificacion de turnos y la cola de espera de los recursos.
+- Politicas operativas: valida horario institucional (lunes a viernes de 08:00 a 20:00), duracion entre 1 hora y 7 dias, anticipacion maxima de 30 dias, no superposicion de horarios y limite de operaciones simultaneas segun el nivel de reputacion.
+- Cola de espera con prioridad: cuando un recurso ya esta reservado, la nueva solicitud entra en estado PENDIENTE. El AlgoritmoPrioridadService ordena la cola priorizando mayor puntaje de reputacion y antiguedad (FIFO). Si una reserva confirmada se cancela, se promueve automaticamente al siguiente candidato elegible sin sanciones.
+- Vencimiento automatico y conversion: las reservas confirmadas tienen una ventana de recogida de hasta 30 minutos despues de la hora de inicio; si no se recogen, vencen automaticamente y aplican sancion por inasistencia.
+
+3.4 Modulo de Prestamos y Devoluciones (prestamos)
+Controla la entrega fisica en ventanilla, custodia del bien y recepcion en devolucion.
+- Ciclo de estados: POR_ENTREGAR -> ENTREGADO -> DEVUELTO (o VENCIDO si supera la fecha fin, o CANCELADO si se cancela o expira antes de la entrega fisica).
+- Ventanilla de entrega (/ventanilla): exige registrar una Garantia (carnet universitario, DNI o deposito) con Compromiso de Responsabilidad firmado y completar un Checklist de estado inicial dinamico segun la categoria del recurso. Al entregar, el recurso pasa a EN_USO y se registra la fecha_entrega_real.
+- Devolucion e inspeccion: registra el Checklist de devolucion, fecha_devolucion_real y evaluacion diferenciada de danos (NINGUNO, DANO_PARCIAL o DANO_TOTAL con monto de dano). Si no hay danos, libera la garantia (LIBERADA) y devuelve el recurso a DISPONIBLE; si hay danos, retiene la garantia (RETENIDA), pasa el recurso a MANTENIMIENTO y aplica la sancion correspondiente en reputacion.
+
+4. DATOS DE DEMOSTRACION CONFIGURADOS PARA LA ENTREGA
+El script db/seed.sql carga de forma automatica e idempotente:
+- 2 cuentas base de prueba (admin@example.com y estudiante@example.com).
+- 48 alumnos de la clase registrados con correo institucional (@unsa.edu.pe).
+- 5 docentes y 2 usuarios de personal administrativo.
+- 20 articulos en el catalogo (computo, multimedia, laboratorio y libros).
+- 5 articulos actualmente prestados (estado EN_USO con reserva convertida, prestamo entregado, garantia registrada y checklist inicial completo).
+
+
+====================================================================
+PARTE 2: ACTIVIDADES REALIZADAS POR CADA MIEMBRO DEL EQUIPO
+====================================================================
+
+1. Diego Canqui Ecos (Lider de Proyecto — Modulo Identidad y Reputacion + Integracion Final)
+- Diseno de la arquitectura DDD, estructura de capas, configuracion de Docker/PostgreSQL y definicion de politicas generales del sistema.
+- Implementacion completa del modulo identidad_reputacion (autenticacion JWT, hash bcrypt, gestion de usuarios y roles, perfiles de reputacion, sanciones, excepciones academicas, amnistia mensual y bitacora de movimientos con exportacion CSV).
+- Desarrollo del frontend de identidad (login, registro, perfil de reputacion, administracion de usuarios, panel maestro-detalle de gestion de alumnos y layout de navegacion por roles).
+- Integracion transversal de los 4 modulos en la recta final: seguridad por roles en endpoints, ciclo de estados de prestamos y reservas, fichas tecnicas adaptables, checklists dinamicos, mejoras de interfaz en catalogo/ventanilla, bateria de pruebas automatizadas y script de datos iniciales (seed).
+
+2. Rodrigo Abraham Ramos Mamani (Responsable del Modulo Catalogo)
+- Modelado de dominio del contexto catalogo (agregado Recurso, value object FichaTecnica y enum EstadoRecurso).
+- Implementacion del servicio de aplicacion RecursoApplicationService, repositorio SQL en PostgreSQL y controlador REST (/recursos, disponibilidad, ficha tecnica y actualizacion de estado).
+- Definicion de politicas del modulo de catalogo y construccion de la vista principal de exploracion y gestion de recursos en frontend.
+- Pruebas unitarias y de integracion del modulo de catalogo.
+
+3. Johan Diego Huamani Sabina (Responsable del Modulo Reservas)
+- Modelado de dominio del contexto reservas (agregado Reserva, enum EstadoReserva y servicio de dominio AlgoritmoPrioridadService).
+- Implementacion de ReservaService, repositorio SQL y controlador REST (/reservas, consulta de cola de espera, confirmacion, cancelacion con promocion automatica y conversion a prestamo).
+- Definicion de politicas operativas de reservas y construccion de la pantalla Mis Reservas en frontend.
+- Pruebas unitarias y de API del flujo de reservas y cola de espera.
+
+4. Diego Mauricio Villanueva Flores (Responsable del Modulo Prestamos y Devoluciones)
+- Modelado de dominio del contexto prestamos (agregados Prestamo, Garantia y Checklist, value object CompromisoResponsabilidad y enums de estado y tipo).
+- Implementacion de PrestamoService, repositorios SQL y controlador REST (/prestamos, flujo de entrega con garantia y checklist, inspecciones, historial y devolucion).
+- Definicion de politicas de entrega, garantias y devoluciones, y construccion de las vistas de Historial y Ventanilla en frontend.
+- Pruebas unitarias y de integracion del ciclo de prestamos y devoluciones.

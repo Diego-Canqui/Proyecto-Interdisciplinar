@@ -71,10 +71,23 @@ class FakePrestamoRepository:
         self.saved = []
 
     def guardar(self, prestamo):
+        for idx, p in enumerate(self.saved):
+            if getattr(p, "id", None) == getattr(prestamo, "id", None):
+                self.saved[idx] = prestamo
+                return
         self.saved.append(prestamo)
+
+    def obtener_por_id(self, id_prestamo):
+        for p in self.saved:
+            if getattr(p, "id", None) == id_prestamo:
+                return p
+        return None
 
     def obtener_por_usuario(self, id_usuario):
         return [p for p in self.saved if getattr(p, "usuario_id", None) == id_usuario]
+
+    def obtener_por_recurso(self, id_recurso):
+        return [p for p in self.saved if getattr(p, "recurso_id", None) == id_recurso]
 
 
 class FakeRecursoRepository:
@@ -133,8 +146,11 @@ def make_reserva(estado=EstadoReserva.CONFIRMADA):
 def make_prestamo_service(prestamo_repository, recurso_repository=None):
     return PrestamoService(
         prestamo_repository=prestamo_repository,
-        checklist_repository=SimpleNamespace(),
-        garantia_repository=SimpleNamespace(),
+        checklist_repository=SimpleNamespace(guardar=lambda *_a, **_k: None),
+        garantia_repository=SimpleNamespace(
+            obtener_por_prestamo=lambda *_a, **_k: None,
+            guardar=lambda *_a, **_k: None,
+        ),
         recurso_repository=recurso_repository or FakeRecursoRepository(),
     )
 
@@ -388,7 +404,7 @@ def test_crear_reserva_horario_libre_confirma_automaticamente():
     assert repo.saved[0].estado == EstadoReserva.CONFIRMADA
 
 
-def test_crear_reserva_horario_ocupado_otro_usuario_guarda_pendiente():
+def test_crear_reserva_horario_ocupado_otro_usuario_rechaza_sin_cola():
     u1 = uuid4()
     u2 = uuid4()
     recurso_id = uuid4()
@@ -410,12 +426,9 @@ def test_crear_reserva_horario_ocupado_otro_usuario_guarda_pendiente():
         fecha_fin=inicio + timedelta(minutes=90),
     )
 
-    reserva_dto = service.crear_reserva(datos)
-    assert reserva_dto.estado == "PENDIENTE"
-    # Guardada en pendiente sin lanzar excepción
-    guardada = repo.obtener_por_id(reserva_dto.id)
-    assert guardada is not None
-    assert guardada.estado == EstadoReserva.PENDIENTE
+    with pytest.raises(ValueError, match="puedes prestarte desde el"):
+        service.crear_reserva(datos)
+    assert len(repo.reservas) == 1
 
 
 def test_crear_reserva_mismo_usuario_duplica_lanza_error():
@@ -489,11 +502,10 @@ def test_confirmar_reserva_choca_con_otra_confirmada_lanza_error():
         service.confirmar_reserva(r_pendiente.id)
 
 
-def test_cancelar_reserva_confirmada_promueve_candidata_con_mayor_reputacion():
+def test_cancelar_reserva_confirmada_no_promueve_cola():
     recurso_id = uuid4()
     u_confirmado = uuid4()
-    u_bajo = uuid4()
-    u_alto = uuid4()
+    u_pendiente = uuid4()
     inicio, fin = _horario_futuro()
 
     r_confirmada = Reserva.crear(
@@ -504,27 +516,20 @@ def test_cancelar_reserva_confirmada_promueve_candidata_con_mayor_reputacion():
     )
     r_confirmada.confirmar()
 
-    r_bajo = Reserva.crear(
-        usuario_id=u_bajo,
-        recurso_id=recurso_id,
-        fecha_inicio=inicio,
-        fecha_fin=fin,
-    )
-    r_alto = Reserva.crear(
-        usuario_id=u_alto,
+    r_pendiente = Reserva.crear(
+        usuario_id=u_pendiente,
         recurso_id=recurso_id,
         fecha_inicio=inicio,
         fecha_fin=fin,
     )
 
-    repo = FakeReservaRepository(reservas=[r_confirmada, r_bajo, r_alto])
-    reputacion = FakeReputacionService(puntajes={u_bajo: 300, u_alto: 750})
+    repo = FakeReservaRepository(reservas=[r_confirmada, r_pendiente])
+    reputacion = FakeReputacionService(puntajes={u_pendiente: 750})
     service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()), reputacion)
 
     assert service.cancelar_reserva(r_confirmada.id) is True
     assert r_confirmada.estado == EstadoReserva.CANCELADA
-    assert r_alto.estado == EstadoReserva.CONFIRMADA
-    assert r_bajo.estado == EstadoReserva.PENDIENTE
+    assert r_pendiente.estado == EstadoReserva.PENDIENTE
 
 
 def test_cancelar_reserva_pendiente_no_promueve_ninguna():
@@ -735,6 +740,74 @@ def test_reserva_crear_valida_horario_en_zona_horaria_negocio():
     assert r_ok.fecha_inicio == lunes_15_utc
 
 
+def test_reserva_crear_rechaza_inicio_despues_de_19_30():
+    u_id = uuid4()
+    r_id = uuid4()
+    lunes = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    martes = datetime(2026, 11, 3, tzinfo=timezone.utc)
+
+    # 19:31 (después de las 19:30) incluso con devolución al día siguiente
+    with pytest.raises(
+        ValueError,
+        match="la hora máxima de inicio de una reserva es a las 19:30",
+    ):
+        Reserva.crear(
+            usuario_id=u_id,
+            recurso_id=r_id,
+            fecha_inicio=lunes.replace(hour=19, minute=31),
+            fecha_fin=martes.replace(hour=10, minute=0),
+        )
+
+    # 19:59 (después de las 19:30) con devolución al día siguiente
+    with pytest.raises(
+        ValueError,
+        match="la hora máxima de inicio de una reserva es a las 19:30",
+    ):
+        Reserva.crear(
+            usuario_id=u_id,
+            recurso_id=r_id,
+            fecha_inicio=lunes.replace(hour=19, minute=59),
+            fecha_fin=martes.replace(hour=9, minute=0),
+        )
+
+    # Borde exacto 19:30:00 con devolución al día siguiente permitido
+    r_borde = Reserva.crear(
+        usuario_id=u_id,
+        recurso_id=r_id,
+        fecha_inicio=lunes.replace(hour=19, minute=30, second=0),
+        fecha_fin=martes.replace(hour=8, minute=0, second=0),
+    )
+    assert r_borde.fecha_inicio.hour == 19
+    assert r_borde.fecha_inicio.minute == 30
+
+    # Validación en zona horaria de negocio (America/Lima = UTC-5):
+    # 00:31 UTC del martes = 19:31 lunes en Lima -> rechazado
+    inicio_19_31_lima = datetime(2026, 11, 3, 0, 31, tzinfo=timezone.utc)
+    fin_martes_10_lima = datetime(2026, 11, 3, 15, 0, tzinfo=timezone.utc)
+    with pytest.raises(
+        ValueError,
+        match="la hora máxima de inicio de una reserva es a las 19:30",
+    ):
+        Reserva.crear(
+            usuario_id=u_id,
+            recurso_id=r_id,
+            fecha_inicio=inicio_19_31_lima,
+            fecha_fin=fin_martes_10_lima,
+            zona_horaria="America/Lima",
+        )
+
+    # 00:30 UTC del martes = 19:30 lunes en Lima -> permitido
+    inicio_19_30_lima = datetime(2026, 11, 3, 0, 30, tzinfo=timezone.utc)
+    r_lima_ok = Reserva.crear(
+        usuario_id=u_id,
+        recurso_id=r_id,
+        fecha_inicio=inicio_19_30_lima,
+        fecha_fin=fin_martes_10_lima,
+        zona_horaria="America/Lima",
+    )
+    assert r_lima_ok.fecha_inicio == inicio_19_30_lima
+
+
 def test_reserva_crear_rechaza_duracion_menor_a_1_hora():
     u_id = uuid4()
     r_id = uuid4()
@@ -827,46 +900,45 @@ def test_convertir_a_prestamo_usuario_con_sancion_vigente_lanza_error():
         service.convertir_a_prestamo(reserva.id)
 
 
-def test_cancelar_reserva_omite_candidato_sancionado_en_promocion():
+def test_crear_reserva_rechaza_si_choca_con_prestamo_en_curso_y_permite_despues():
     recurso_id = uuid4()
-    u_confirmado = uuid4()
-    u_sancionado = uuid4()
-    u_limpio = uuid4()
+    u_actual = uuid4()
+    u_nuevo = uuid4()
     inicio, fin = _horario_futuro()
 
-    r_confirmada = Reserva.crear(
-        usuario_id=u_confirmado,
-        recurso_id=recurso_id,
-        fecha_inicio=inicio,
-        fecha_fin=fin,
-    )
-    r_confirmada.confirmar()
-
-    r_sancionado = Reserva.crear(
-        usuario_id=u_sancionado,
-        recurso_id=recurso_id,
-        fecha_inicio=inicio,
-        fecha_fin=fin,
-    )
-    r_limpio = Reserva.crear(
-        usuario_id=u_limpio,
-        recurso_id=recurso_id,
+    prestamo_repo = FakePrestamoRepository()
+    prestamo_service = make_prestamo_service(prestamo_repo)
+    assert prestamo_service.solicitar_prestamo(
+        id_reserva=uuid4(),
+        id_usuario=u_actual,
+        id_recurso=recurso_id,
         fecha_inicio=inicio,
         fecha_fin=fin,
     )
 
-    repo = FakeReservaRepository(reservas=[r_confirmada, r_sancionado, r_limpio])
-    # u_sancionado tiene mayor puntaje (900 vs 500) pero está sancionado (elegible=False)
-    reputacion = FakeReputacionService(
-        puntajes={u_sancionado: 900, u_limpio: 500},
-        elegibles={u_sancionado: False, u_limpio: True},
-    )
-    service = ReservaService(repo, make_prestamo_service(FakePrestamoRepository()), reputacion)
+    repo = FakeReservaRepository()
+    service = ReservaService(repo, prestamo_service)
 
-    assert service.cancelar_reserva(r_confirmada.id) is True
-    # u_sancionado fue saltado; se promovió a u_limpio
-    assert r_sancionado.estado == EstadoReserva.PENDIENTE
-    assert r_limpio.estado == EstadoReserva.CONFIRMADA
+    # Intento que choca con el préstamo en curso: se rechaza indicando desde cuándo puede prestarte
+    datos_solapados = CrearReservaDTO(
+        usuario_id=u_nuevo,
+        recurso_id=recurso_id,
+        fecha_inicio=inicio + timedelta(minutes=30),
+        fecha_fin=fin + timedelta(hours=1),
+    )
+    with pytest.raises(ValueError, match="el recurso está siendo usado; puedes reservarlo desde el"):
+        service.crear_reserva(datos_solapados)
+
+    # Intento posterior a la fecha_fin del préstamo: se acepta y confirma
+    datos_posteriores = CrearReservaDTO(
+        usuario_id=u_nuevo,
+        recurso_id=recurso_id,
+        fecha_inicio=fin,
+        fecha_fin=fin + timedelta(hours=1),
+    )
+    reserva_dto = service.crear_reserva(datos_posteriores)
+    assert reserva_dto.estado == "CONFIRMADA"
+    assert prestamo_service.obtener_disponible_desde_recurso(recurso_id) == fin
 
 
 # --- Tests RF-04: Límite de operaciones activas simultáneas según NivelReputacion ---
@@ -1072,7 +1144,7 @@ def test_crear_reserva_rechaza_recurso_mantenimiento_o_fuera_de_servicio_y_permi
             ahora=ahora_fijo,
         )
 
-    # EN_USO -> permitido (puede reservarse o entrar a cola)
+    # EN_USO -> permitido, queda en estado PENDIENTE hasta que el recurso vuelva a DISPONIBLE
     reserva_en_uso = service.crear_reserva(
         CrearReservaDTO(
             usuario_id=u_id,
@@ -1083,8 +1155,9 @@ def test_crear_reserva_rechaza_recurso_mantenimiento_o_fuera_de_servicio_y_permi
         ahora=ahora_fijo,
     )
     assert reserva_en_uso.id is not None
+    assert reserva_en_uso.estado == "PENDIENTE"
 
-    # DISPONIBLE -> permitido
+    # DISPONIBLE -> permitido y confirmado automáticamente
     reserva_disp = service.crear_reserva(
         CrearReservaDTO(
             usuario_id=u_id,
@@ -1095,6 +1168,7 @@ def test_crear_reserva_rechaza_recurso_mantenimiento_o_fuera_de_servicio_y_permi
         ahora=ahora_fijo,
     )
     assert reserva_disp.id is not None
+    assert reserva_disp.estado == "CONFIRMADA"
 
 
 def test_convertir_a_prestamo_valida_ventana_temporal():
@@ -1154,6 +1228,126 @@ def test_convertir_a_prestamo_expira_y_rechaza_despues_de_limite_recogida():
         service.convertir_a_prestamo(reserva.id, ahora=inicio + timedelta(minutes=31))
     assert reserva.estado == EstadoReserva.VENCIDA
     assert prestamo_repo.saved == []
+
+
+def test_devolucion_sin_dano_confirma_reservas_pendientes_automaticamente():
+    from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
+    from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
+    from prestamos_recursos.contexts.prestamos.domain.enums.tipo_dano_devolucion import (
+        TipoDanoDevolucion,
+    )
+
+    recurso_id = uuid4()
+    usuario_actual = uuid4()
+    usuario_espera = uuid4()
+    ahora_fijo = datetime(2026, 11, 2, 15, 0, tzinfo=timezone.utc)  # Lunes 10:00 Lima
+
+    prestamo_repo = FakePrestamoRepository()
+    recurso_repo = FakeRecursoRepository(EstadoRecurso.EN_USO)
+    prestamo_service = make_prestamo_service(prestamo_repo, recurso_repo)
+
+    prestamo_activo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_id,
+        usuario_id=usuario_actual,
+        fecha_inicio=ahora_fijo - timedelta(hours=1),
+        fecha_fin=ahora_fijo + timedelta(hours=1),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    prestamo_repo.guardar(prestamo_activo)
+
+    reserva_repo = FakeReservaRepository()
+    reserva_service = ReservaService(
+        reserva_repo,
+        prestamo_service,
+        catalogo_service=recurso_repo,
+    )
+    prestamo_service.vincular_reserva_service(reserva_service)
+
+    # El usuario en espera reserva para después del préstamo en curso -> queda PENDIENTE
+    dto_pendiente = reserva_service.crear_reserva(
+        CrearReservaDTO(
+            usuario_id=usuario_espera,
+            recurso_id=recurso_id,
+            fecha_inicio=ahora_fijo + timedelta(hours=2),
+            fecha_fin=ahora_fijo + timedelta(hours=4),
+        ),
+        ahora=ahora_fijo,
+    )
+    assert dto_pendiente.estado == "PENDIENTE"
+
+    # Al devolver sin daño, el recurso vuelve a DISPONIBLE y la reserva pasa a CONFIRMADA
+    prestamo_service.procesar_devolucion(
+        id_prestamo=prestamo_activo.id,
+        observaciones_retorno="Todo en perfecto estado",
+        tipo_dano=TipoDanoDevolucion.NINGUNO,
+        fecha_devolucion=ahora_fijo + timedelta(minutes=30),
+    )
+
+    assert recurso_repo.recurso.estado == EstadoRecurso.DISPONIBLE
+    reserva_actualizada = reserva_repo.obtener_por_id(dto_pendiente.id)
+    assert reserva_actualizada is not None
+    assert reserva_actualizada.estado == EstadoReserva.CONFIRMADA
+
+
+def test_devolucion_con_dano_cancela_reservas_pendientes_automaticamente():
+    from prestamos_recursos.contexts.prestamos.domain.entities.prestamo import Prestamo
+    from prestamos_recursos.contexts.prestamos.domain.enums.estado_prestamo import EstadoPrestamo
+    from prestamos_recursos.contexts.prestamos.domain.enums.tipo_dano_devolucion import (
+        TipoDanoDevolucion,
+    )
+
+    recurso_id = uuid4()
+    usuario_actual = uuid4()
+    usuario_espera = uuid4()
+    ahora_fijo = datetime(2026, 11, 2, 15, 0, tzinfo=timezone.utc)  # Lunes 10:00 Lima
+
+    prestamo_repo = FakePrestamoRepository()
+    recurso_repo = FakeRecursoRepository(EstadoRecurso.EN_USO)
+    prestamo_service = make_prestamo_service(prestamo_repo, recurso_repo)
+
+    prestamo_activo = Prestamo(
+        reserva_id=uuid4(),
+        recurso_id=recurso_id,
+        usuario_id=usuario_actual,
+        fecha_inicio=ahora_fijo - timedelta(hours=1),
+        fecha_fin=ahora_fijo + timedelta(hours=1),
+        estado=EstadoPrestamo.ENTREGADO,
+    )
+    prestamo_repo.guardar(prestamo_activo)
+
+    reserva_repo = FakeReservaRepository()
+    reserva_service = ReservaService(
+        reserva_repo,
+        prestamo_service,
+        catalogo_service=recurso_repo,
+    )
+    prestamo_service.vincular_reserva_service(reserva_service)
+
+    dto_pendiente = reserva_service.crear_reserva(
+        CrearReservaDTO(
+            usuario_id=usuario_espera,
+            recurso_id=recurso_id,
+            fecha_inicio=ahora_fijo + timedelta(hours=2),
+            fecha_fin=ahora_fijo + timedelta(hours=4),
+        ),
+        ahora=ahora_fijo,
+    )
+    assert dto_pendiente.estado == "PENDIENTE"
+
+    # Al devolver con daño parcial, el recurso pasa a MANTENIMIENTO y la reserva se CANCELA
+    prestamo_service.procesar_devolucion(
+        id_prestamo=prestamo_activo.id,
+        observaciones_retorno="Pantalla rayada",
+        tipo_dano=TipoDanoDevolucion.DANO_PARCIAL,
+        fecha_devolucion=ahora_fijo + timedelta(minutes=30),
+    )
+
+    assert recurso_repo.recurso.estado == EstadoRecurso.MANTENIMIENTO
+    reserva_actualizada = reserva_repo.obtener_por_id(dto_pendiente.id)
+    assert reserva_actualizada is not None
+    assert reserva_actualizada.estado == EstadoReserva.CANCELADA
+
 
 
 
