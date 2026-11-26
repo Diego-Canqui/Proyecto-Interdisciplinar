@@ -11,6 +11,7 @@ from prestamos_recursos.shared.base_entity import BaseEntity
 DURACION_MINIMA_RESERVA = timedelta(hours=1)
 DURACION_MAXIMA_RESERVA = timedelta(days=7)
 HORA_APERTURA_VENTANILLA = time(8, 0, 0)
+HORA_MAXIMA_INICIO_RESERVA = time(19, 30, 0)
 HORA_CIERRE_VENTANILLA = time(20, 0, 0)
 _ESTADOS_QUE_OCUPAN_RECURSO = {EstadoReserva.PENDIENTE, EstadoReserva.CONFIRMADA}
 
@@ -45,6 +46,22 @@ class Reserva(BaseEntity):
             )
 
     @classmethod
+    def _validar_hora_maxima_inicio(
+        cls, fecha_inicio: datetime, zona_horaria: str | None = None
+    ) -> None:
+        fecha_ref = (
+            cls._a_utc(fecha_inicio).astimezone(ZoneInfo(zona_horaria))
+            if zona_horaria
+            else fecha_inicio
+        )
+        hora_nominal = fecha_ref.time().replace(tzinfo=None)
+        if hora_nominal > HORA_MAXIMA_INICIO_RESERVA:
+            raise ValueError(
+                "la hora máxima de inicio de una reserva es a las 19:30 "
+                "(para garantizar los 30 minutos de recogida antes del cierre a las 20:00)"
+            )
+
+    @classmethod
     def crear(
         cls,
         usuario_id: UUID,
@@ -63,6 +80,7 @@ class Reserva(BaseEntity):
 
         cls._validar_horario_atencion(fecha_inicio, zona_horaria=zona_horaria)
         cls._validar_horario_atencion(fecha_fin, zona_horaria=zona_horaria)
+        cls._validar_hora_maxima_inicio(fecha_inicio, zona_horaria=zona_horaria)
 
         return cls(
             usuario_id=usuario_id,

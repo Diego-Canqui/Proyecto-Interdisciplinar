@@ -62,12 +62,36 @@ class PrestamoService:
         reputacion_service: ReputacionService | None = None,
         catalogo_service: RecursoApplicationService | None = None,
         recurso_repository: Any | None = None,
+        reserva_service: Any | None = None,
     ) -> None:
         self._prestamo_repository = prestamo_repository
         self._checklist_repository = checklist_repository
         self._garantia_repository = garantia_repository
         self._reputacion_service = reputacion_service
         self._recurso_repository = catalogo_service or recurso_repository
+        self._reserva_service = reserva_service
+
+    def vincular_reserva_service(self, reserva_service: Any) -> None:
+        """Vincula el servicio de reservas para resolver reservas pendientes al liberar recursos."""
+        self._reserva_service = reserva_service
+
+    def _notificar_disponibilidad_recurso(
+        self,
+        recurso_id: UUID,
+        *,
+        disponible: bool,
+        ahora: datetime | None = None,
+    ) -> None:
+        """Notifica a reservas cuando un recurso vuelve a DISPONIBLE o queda inhabilitado."""
+        if self._reserva_service is None or not hasattr(
+            self._reserva_service, "resolver_pendientes_por_recurso"
+        ):
+            return
+        self._reserva_service.resolver_pendientes_por_recurso(
+            recurso_id,
+            recurso_disponible=disponible,
+            ahora=ahora,
+        )
 
     def _resolver_nombre_recurso(self, recurso_id: UUID) -> str | None:
         """Resuelve de forma segura el nombre del recurso desde el catálogo."""
@@ -356,6 +380,9 @@ class PrestamoService:
                     self._recurso_repository.actualizar_estado(
                         prestamo.recurso_id, EstadoRecurso.DISPONIBLE
                     )
+                    self._notificar_disponibilidad_recurso(
+                        prestamo.recurso_id, disponible=True, ahora=instante
+                    )
             if self._reputacion_service is not None and hasattr(
                 self._reputacion_service, "aplicar_sancion"
             ):
@@ -506,6 +533,11 @@ class PrestamoService:
             self._recurso_repository.actualizar_estado(
                 prestamo.recurso_id, estado_por_dano[tipo_efectivo]
             )
+            self._notificar_disponibilidad_recurso(
+                prestamo.recurso_id,
+                disponible=(tipo_efectivo == TipoDanoDevolucion.NINGUNO),
+                ahora=prestamo.fecha_devolucion_real,
+            )
 
         self._aplicar_reputacion_devolucion(
             usuario_id=prestamo.usuario_id,
@@ -639,6 +671,7 @@ class PrestamoService:
             self._recurso_repository.actualizar_estado(
                 prestamo.recurso_id, EstadoRecurso.DISPONIBLE
             )
+            self._notificar_disponibilidad_recurso(prestamo.recurso_id, disponible=True)
 
         return PrestamoDTO.from_entity(prestamo)
 
@@ -652,4 +685,33 @@ class PrestamoService:
             EstadoPrestamo.VENCIDO,
         }
         return sum(1 for p in prestamos if p.estado in estados_en_curso)
+
+    def obtener_prestamos_en_curso_por_recurso(
+        self, id_recurso: UUID, ahora: datetime | None = None
+    ) -> list[PrestamoDTO]:
+        """Retorna los préstamos en curso (POR_ENTREGAR, ENTREGADO o VENCIDO) de un recurso."""
+        if hasattr(self._prestamo_repository, "obtener_por_recurso"):
+            prestamos = self._prestamo_repository.obtener_por_recurso(id_recurso)
+        else:
+            prestamos = [
+                p for p in self._prestamo_repository.obtener_todos() if p.recurso_id == id_recurso
+            ]
+        self._sincronizar_lista(prestamos, ahora)
+        estados_en_curso = {
+            EstadoPrestamo.POR_ENTREGAR,
+            EstadoPrestamo.ENTREGADO,
+            EstadoPrestamo.VENCIDO,
+        }
+        en_curso = [p for p in prestamos if p.estado in estados_en_curso]
+        en_curso.sort(key=lambda p: _ensure_utc(p.fecha_fin))
+        return [PrestamoDTO.from_entity(p) for p in en_curso]
+
+    def obtener_disponible_desde_recurso(
+        self, id_recurso: UUID, ahora: datetime | None = None
+    ) -> datetime | None:
+        """Retorna la fecha_fin del préstamo en curso más lejano de un recurso, si existe."""
+        en_curso = self.obtener_prestamos_en_curso_por_recurso(id_recurso, ahora=ahora)
+        if not en_curso:
+            return None
+        return max(_ensure_utc(p.fecha_fin) for p in en_curso)
 

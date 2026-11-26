@@ -45,6 +45,13 @@ function esHorarioAtencionValido(fechaLocalStr) {
   return true;
 }
 
+function esHoraInicioValida(fechaLocalStr) {
+  const d = new Date(fechaLocalStr);
+  if (Number.isNaN(d.getTime())) return false;
+  const segundosTotales = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+  return segundosTotales <= 19 * 3600 + 30 * 60;
+}
+
 function calcularFechaMaxima(fechaInicioStr) {
   if (!fechaInicioStr) return undefined;
   const fecha = new Date(fechaInicioStr);
@@ -59,6 +66,51 @@ function mostrarFecha(fecha) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(fecha));
+}
+
+function mostrarHora(fecha) {
+  return new Intl.DateTimeFormat("es-PE", {
+    timeStyle: "short",
+  }).format(fecha);
+}
+
+function mostrarSoloFecha(fecha) {
+  return new Intl.DateTimeFormat("es-PE", {
+    dateStyle: "medium",
+  }).format(fecha);
+}
+
+function formatearVentanaRecogida(fechaInicio, fechaFin) {
+  const inicio = new Date(fechaInicio);
+  const fin = new Date(fechaFin);
+  if (Number.isNaN(inicio.getTime()) || Number.isNaN(fin.getTime())) return "";
+  const desde = new Date(inicio.getTime() - 60 * 60 * 1000);
+  const limite30m = new Date(inicio.getTime() + 30 * 60 * 1000);
+  const hasta = limite30m < fin ? limite30m : fin;
+  const mismoDia =
+    desde.getFullYear() === hasta.getFullYear() &&
+    desde.getMonth() === hasta.getMonth() &&
+    desde.getDate() === hasta.getDate();
+  if (mismoDia) {
+    return `desde las ${mostrarHora(desde)} hasta las ${mostrarHora(hasta)} (${mostrarSoloFecha(desde)})`;
+  }
+  return `desde el ${mostrarFecha(desde)} hasta el ${mostrarFecha(hasta)}`;
+}
+
+function formatearAvisoEnUso(disponibleDesde) {
+  const advertenciaRiesgo =
+    "Tu reserva quedará pendiente hasta que sea devuelto en buen estado; si hay retraso o daño, podría cancelarse.";
+  if (!disponibleDesde) {
+    return `El recurso está siendo usado. ${advertenciaRiesgo}`;
+  }
+  const fecha = new Date(disponibleDesde);
+  if (Number.isNaN(fecha.getTime())) {
+    return `El recurso está siendo usado. ${advertenciaRiesgo}`;
+  }
+  if (fecha <= new Date()) {
+    return "El recurso está siendo usado y tiene una devolución pendiente.";
+  }
+  return `El recurso está siendo usado (disponible aprox. desde el ${mostrarFecha(fecha)}). ${advertenciaRiesgo}`;
 }
 
 function mensajeError(error) {
@@ -89,9 +141,21 @@ export default function MisReservasPage() {
     [recursos]
   );
 
+  const recursoSeleccionado = recursoId ? recursosPorId.get(recursoId) : null;
+
   const reservasActivas = reservas.filter((reserva) =>
     ESTADOS_ACTIVOS.has(reserva.estado)
   );
+
+  const reservasCanceladasNoDisponibles = reservas.filter((reserva) => {
+    if (reserva.estado !== "CANCELADA") return false;
+    if (new Date(reserva.fecha_fin) <= new Date()) return false;
+    const recurso = recursosPorId.get(reserva.recurso_id);
+    return (
+      recurso?.estado === "MANTENIMIENTO" ||
+      recurso?.estado === "FUERA_DE_SERVICIO"
+    );
+  });
 
   const cargarReservas = async (perfilActual = usuario) => {
     if (!perfilActual) return;
@@ -174,6 +238,13 @@ export default function MisReservasPage() {
       return;
     }
 
+    if (!esHoraInicioValida(fechaInicio)) {
+      setError(
+        "La hora máxima de inicio de una reserva es a las 19:30 (para garantizar los 30 minutos de recogida antes del cierre a las 20:00)."
+      );
+      return;
+    }
+
     setEnviando(true);
     try {
       const reservaCreada = await solicitarReserva({
@@ -188,12 +259,20 @@ export default function MisReservasPage() {
           reservaCreada,
         ]);
       }
+      const ventanaRecogida = formatearVentanaRecogida(
+        reservaCreada?.fecha_inicio || inicioIso,
+        reservaCreada?.fecha_fin || finIso
+      );
       if (reservaCreada?.estado === "PENDIENTE") {
         setExito(
-          "El horario ya tiene una reserva confirmada. Tu solicitud quedó en lista de espera (PENDIENTE) y se priorizará según tu reputación."
+          "Reserva registrada como pendiente. El recurso está siendo usado actualmente; se confirmará automáticamente cuando sea devuelto en buen estado (si ocurre un retraso o daño, se cancelará y lo verás aquí)."
         );
       } else {
-        setExito("Reserva registrada y confirmada.");
+        setExito(
+          ventanaRecogida
+            ? `Reserva registrada y confirmada. Puedes recoger el recurso ${ventanaRecogida}.`
+            : "Reserva registrada y confirmada."
+        );
       }
       await cargarReservas(usuario);
       setRecursoId("");
@@ -321,10 +400,20 @@ export default function MisReservasPage() {
                   })}
                 </select>
                 <span className="campo__ayuda">
-                  Horario de atención: lunes a viernes de 08:00 a 20:00. Duración: de 1 hora a 7
-                  días. Anticipación máxima: 30 días. Si el horario se cruza con otra reserva,
-                  entrará en lista de espera priorizada por reputación.
+                  Horario de atención: lunes a viernes de 08:00 a 20:00 (inicio hasta las 19:30).
+                  Duración: de 1 hora a 7 días. Anticipación máxima: 30 días. Si el horario se
+                  cruza con un préstamo en curso o una reserva confirmada, deberás elegir un
+                  horario libre.
                 </span>
+                {recursoSeleccionado?.estado === "EN_USO" && (
+                  <div
+                    className="alerta alerta--info"
+                    role="status"
+                    style={{ marginTop: "0.5rem", marginBottom: 0 }}
+                  >
+                    ℹ️ {formatearAvisoEnUso(recursoSeleccionado.disponible_desde)}
+                  </div>
+                )}
               </div>
 
               <div className="campo">
@@ -357,8 +446,8 @@ export default function MisReservasPage() {
                   required
                 />
                 <span className="campo__ayuda">
-                  Horario de atención: lunes a viernes de 08:00 a 20:00. Duración: de 1 hora a 7
-                  días.
+                  Horario de atención: lunes a viernes de 08:00 a 20:00 (inicio hasta las 19:30).
+                  Duración: de 1 hora a 7 días.
                 </span>
               </div>
 
@@ -374,6 +463,29 @@ export default function MisReservasPage() {
 
       <section aria-labelledby="titulo-lista-reservas" style={{ marginTop: "2rem" }}>
         <h2 id="titulo-lista-reservas">Mis reservas activas</h2>
+
+        {reservasCanceladasNoDisponibles.length > 0 && (
+          <div
+            className="alerta alerta--aviso"
+            role="status"
+            style={{ marginBottom: "1rem" }}
+          >
+            <div>
+              {reservasCanceladasNoDisponibles.map((reserva) => {
+                const nombre =
+                  recursosPorId.get(reserva.recurso_id)?.nombre ||
+                  "el recurso seleccionado";
+                return (
+                  <p key={reserva.id} style={{ margin: "0.25rem 0" }}>
+                    Tu reserva para <strong>{nombre}</strong> (
+                    {mostrarFecha(reserva.fecha_inicio)}) fue cancelada porque el
+                    recurso pasó a mantenimiento o fuera de servicio.
+                  </p>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {reservasActivas.length === 0 ? (
           <div className="estado-vacio">
@@ -393,6 +505,7 @@ export default function MisReservasPage() {
                   <th>Recurso</th>
                   <th>Inicio</th>
                   <th>Fin</th>
+                  <th>Recogida</th>
                   <th>Estado</th>
                   <th>Acciones</th>
                 </tr>
@@ -406,6 +519,16 @@ export default function MisReservasPage() {
                     </td>
                     <td data-etiqueta="Inicio">{mostrarFecha(reserva.fecha_inicio)}</td>
                     <td data-etiqueta="Fin">{mostrarFecha(reserva.fecha_fin)}</td>
+                    <td data-etiqueta="Recogida">
+                      {reserva.estado === "CONFIRMADA"
+                        ? `Puedes recoger ${formatearVentanaRecogida(
+                            reserva.fecha_inicio,
+                            reserva.fecha_fin
+                          )}`
+                        : reserva.estado === "PENDIENTE"
+                          ? "Pendiente de devolución del recurso"
+                          : "—"}
+                    </td>
                     <td data-etiqueta="Estado">
                       <span
                         className={`insignia ${

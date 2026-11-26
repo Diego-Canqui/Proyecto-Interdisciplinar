@@ -17,6 +17,14 @@ trap cleanup INT TERM
 echo "Iniciando PostgreSQL..."
 docker compose up -d
 
+echo "Esperando a que PostgreSQL esté listo..."
+for _ in $(seq 1 30); do
+  if docker compose exec -T db pg_isready -h 127.0.0.1 -U "${POSTGRES_USER:-prestamos}" -d "${POSTGRES_DB:-prestamos_recursos}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
 echo "Iniciando Backend (FastAPI)..."
 cd backend
 source .venv/bin/activate
